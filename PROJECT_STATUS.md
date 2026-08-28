@@ -32,7 +32,7 @@
 - 공개 주소: `https://science-inquiry-platform-974188506094.asia-northeast3.run.app`
 - Google Cloud 프로젝트: `chemistry-tutor-493405`
 - 리전: `asia-northeast3` (서울)
-- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00010-d7w` (`Ready=True`, 트래픽 100%)
+- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00011-484` (`Ready=True`, 트래픽 100%)
 - Cloud SQL 인스턴스: `science-platform-db`
 - 데이터베이스: `science_platform`
 - PostgreSQL 16, 삭제 보호 활성화
@@ -328,7 +328,8 @@
 - 상세 사용서 접근성 감사 결과 두 문서 모두 고위험 항목 0건이었다. 중간 항목은 실제 데이터 표가 아닌 한 칸짜리 안내 상자의 머리글 권고뿐이며, 데이터 표에는 반복 머리글을 적용했다.
 - 상세 사용서 DOCX의 작성자·편집 이력 메타데이터와 임시 식별 속성을 정리했고, 비밀번호·실제 학생 식별정보가 포함되지 않았음을 확인했다.
 - 2026-08-29 최종 TypeScript 타입 검사, Vitest 10개 파일 30개 테스트, Next.js 16.3.2 프로덕션 빌드를 다시 통과했다.
-- 2026-08-29 운영 `/api/health`와 로그인 화면이 HTTP 200으로 응답했고, Cloud Run 리비전 `science-inquiry-platform-00010-d7w`가 `Ready=True`, 트래픽 100%임을 다시 확인했다. 최종 변경은 사용서·문서화뿐이므로 추가 런타임 배포는 하지 않았다.
+- 2026-08-29 최종 소스를 Cloud Run 리비전 `science-inquiry-platform-00011-484`로 다시 배포했고 `Ready=True`, 트래픽 100%를 확인했다.
+- 새 리비전의 `/api/health`와 로그인 화면은 HTTP 200, 비로그인 학생 평가·교사 평가·준비물 제출·교사 도움말 API는 403이었으며, 배포 직후 심각도 `ERROR` 이상 로그는 없었다.
 
 ## 개인정보·보안 주의사항
 
