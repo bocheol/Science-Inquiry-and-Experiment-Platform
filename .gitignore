@@ -7,6 +7,7 @@ out/
 coverage/
 __pycache__/
 *.pyc
+~$*.docx
 output/
 !output/
 output/*

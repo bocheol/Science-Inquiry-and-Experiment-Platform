@@ -18,12 +18,29 @@ const teachers = [
 ];
 const words = ["별빛", "새싹", "바다", "구름", "나무", "여울", "노을", "하늘", "우주", "달빛"];
 const symbols = ["!", "#", "?"];
+const INITIAL_KEYS = ["r", "R", "s", "e", "E", "f", "a", "q", "Q", "t", "T", "d", "w", "W", "c", "z", "x", "v", "g"];
+const MEDIAL_KEYS = ["k", "o", "i", "O", "j", "p", "u", "P", "h", "hk", "ho", "hl", "y", "n", "nj", "np", "nl", "b", "m", "ml", "l"];
+const FINAL_KEYS = ["", "r", "R", "rt", "s", "sw", "sg", "e", "f", "fr", "fa", "fq", "ft", "fx", "fv", "fg", "a", "q", "qt", "t", "T", "d", "w", "c", "z", "x", "v", "g"];
 const tempDir = resolve("tmp", "teacher-accounts");
 const tempPath = resolve(tempDir, "credentials.json");
 const distributionPath = resolve("teacher-accounts.txt");
 
+function hangulToDubeolsik(value) {
+  return Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined || codePoint < 0xac00 || codePoint > 0xd7a3) return character;
+
+    const syllableOffset = codePoint - 0xac00;
+    const initialIndex = Math.floor(syllableOffset / 588);
+    const medialIndex = Math.floor((syllableOffset % 588) / 28);
+    const finalIndex = syllableOffset % 28;
+    return `${INITIAL_KEYS[initialIndex]}${MEDIAL_KEYS[medialIndex]}${FINAL_KEYS[finalIndex]}`;
+  }).join("");
+}
+
 function makeTemporaryPassword() {
-  return `${words[randomInt(words.length)]}${randomInt(10_000, 100_000)}${symbols[randomInt(symbols.length)]}`;
+  const word = hangulToDubeolsik(words[randomInt(words.length)]);
+  return `${word}${randomInt(10_000, 100_000)}${symbols[randomInt(symbols.length)]}`;
 }
 
 await mkdir(tempDir, { recursive: true });
