@@ -28,9 +28,16 @@ CREATE TABLE IF NOT EXISTS teams (
   team_number INTEGER NOT NULL,
   name TEXT NOT NULL,
   leader_user_id TEXT REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  archived_at TIMESTAMPTZ,
+  archived_by TEXT REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (class_id, team_number)
 );
+
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS archived_by TEXT REFERENCES users(id);
 
 CREATE TABLE IF NOT EXISTS team_members (
   id TEXT PRIMARY KEY,
@@ -317,6 +324,17 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS teacher_requests (
+  id TEXT PRIMARY KEY,
+  author_id TEXT NOT NULL REFERENCES users(id),
+  category TEXT NOT NULL CHECK (category IN ('feature', 'bug', 'question', 'other')),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('received', 'reviewing', 'planned', 'resolved')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_class ON users(class_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sequence);
@@ -334,6 +352,8 @@ CREATE INDEX IF NOT EXISTS idx_self_evaluations_student ON self_evaluations(stud
 CREATE INDEX IF NOT EXISTS idx_peer_evaluations_target ON peer_evaluations(evaluatee_id, round_id);
 CREATE INDEX IF NOT EXISTS idx_peer_evaluations_evaluator ON peer_evaluations(evaluator_id, round_id);
 CREATE INDEX IF NOT EXISTS idx_evaluation_publications_student ON evaluation_publications(student_id, round_id);
+CREATE INDEX IF NOT EXISTS idx_teams_status ON teams(status, class_id, team_number);
+CREATE INDEX IF NOT EXISTS idx_teacher_requests_created ON teacher_requests(created_at DESC);
 
 INSERT INTO reports (id, session_id)
 SELECT 'report_' || id, id FROM inquiry_sessions

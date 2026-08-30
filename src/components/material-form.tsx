@@ -5,10 +5,12 @@ import { MATERIAL_BUDGET_WON } from "@/lib/constants";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { normalizeMaterialLink } from "@/lib/material-links";
 import type { MaterialItem } from "@/lib/types";
+import { useToast } from "@/components/toast-provider";
 
 const blankItem = (): MaterialItem => ({ name: "", specification: "", unitPrice: 0, quantity: 1, shipping: 0, link: "" });
 
 export function MaterialForm({ data, onRefresh }: { data: InquiryData; onRefresh: () => Promise<void> }) {
+  const { showToast } = useToast();
   const [items, setItems] = useState<MaterialItem[]>(data.materials?.items.length ? data.materials.items : [blankItem()]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -56,8 +58,14 @@ export function MaterialForm({ data, onRefresh }: { data: InquiryData; onRefresh
     });
     const result = (await response.json()) as { message?: string; syncStatus?: string; syncError?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "준비물을 저장하지 못했습니다.");
+    if (!response.ok) {
+      const message = result.message ?? "준비물을 저장하지 못했습니다.";
+      setError(message);
+      showToast(message, "error");
+      return;
+    }
     setNotice(result.syncStatus === "synced" ? "Google Sheet에 반영했습니다." : "플랫폼에 저장했습니다. Google Sheet 연결 후 자동 또는 교사 재전송이 필요합니다.");
+    showToast("준비물이 신청되었습니다.");
     await onRefresh();
   }
 

@@ -287,7 +287,9 @@ async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
 export async function getInquiryDataForUser(userId: string) {
   const db = await getDb();
   const membership = await db.query<{ team_id: string }>(
-    "SELECT team_id FROM team_members WHERE user_id = $1 AND status = 'active' ORDER BY joined_at DESC LIMIT 1",
+    `SELECT tm.team_id FROM team_members tm JOIN teams t ON t.id = tm.team_id
+      WHERE tm.user_id = $1 AND tm.status = 'active' AND t.status = 'active'
+      ORDER BY tm.joined_at DESC LIMIT 1`,
     [userId],
   );
   const teamId = membership.rows[0]?.team_id;
@@ -303,7 +305,8 @@ export async function assertActiveTeamMember(userId: string, sessionId: string) 
   const result = await db.query<{ team_id: string }>(
     `SELECT tm.team_id
        FROM team_members tm JOIN inquiry_sessions s ON s.team_id = tm.team_id
-      WHERE tm.user_id = $1 AND s.id = $2 AND tm.status = 'active'`,
+       JOIN teams t ON t.id = tm.team_id
+      WHERE tm.user_id = $1 AND s.id = $2 AND tm.status = 'active' AND t.status = 'active'`,
     [userId, sessionId],
   );
   if (!result.rows[0]) throw new Error("현재 팀 자료에 접근할 수 없습니다.");

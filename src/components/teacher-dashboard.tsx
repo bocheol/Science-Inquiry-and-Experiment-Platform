@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { IssuedCredential } from "@/lib/roster";
 import type { TeacherDashboardData } from "@/lib/teacher-data";
+import { useToast } from "@/components/toast-provider";
 
 type Credential = Omit<IssuedCredential, "classNumber"> & { classNumber?: number };
 
@@ -29,6 +30,7 @@ function recentLabel(value: string | null) {
 }
 
 export function TeacherDashboard({ initialData }: { initialData: TeacherDashboardData }) {
+  const { showToast } = useToast();
   const [data, setData] = useState(initialData);
   const [classNumber, setClassNumber] = useState(9);
   const [progressClassNumber, setProgressClassNumber] = useState(0);
@@ -37,6 +39,9 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivingTeamId, setArchivingTeamId] = useState<string | null>(null);
+  const [archiveConfirmation, setArchiveConfirmation] = useState("");
 
   const visibleStudents = useMemo(
     () => data.students.filter((student) => student.classNumber === classNumber),
@@ -45,6 +50,10 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
   const visibleTeams = useMemo(
     () => data.teams.filter((team) => team.classNumber === classNumber),
     [data.teams, classNumber],
+  );
+  const visibleArchivedTeams = useMemo(
+    () => data.archivedTeams.filter((team) => team.classNumber === classNumber),
+    [data.archivedTeams, classNumber],
   );
   const progressTeams = useMemo(
     () => data.teams.filter((team) =>
@@ -79,13 +88,17 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
     const response = await fetch("/api/teacher/roster", { method: "POST", body: formData });
     const result = (await response.json()) as { message?: string; total?: number; issued?: Credential[] };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "명단을 등록하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "명단을 등록하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
     setCredentials(result.issued ?? []);
     setMessage(`${result.total ?? 0}명을 확인했고, 새 계정 ${result.issued?.length ?? 0}개를 만들었습니다.`);
+    showToast("학생 명단을 등록했습니다.");
     await refresh();
   }
 
-  async function teamAction(body: Record<string, unknown>) {
+  async function teamAction(body: Record<string, unknown>, successMessage = "팀 정보를 변경했습니다.") {
     setBusy(true);
     setError("");
     const response = await fetch("/api/teacher/teams", {
@@ -95,8 +108,30 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "팀을 변경하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "팀을 변경하지 못했습니다.";
+      setError(text); showToast(text, "error"); return false;
+    }
+    showToast(successMessage);
     await refresh();
+    return true;
+  }
+
+  function startArchive(teamId: string) {
+    setArchivingTeamId(teamId);
+    setArchiveConfirmation("");
+    setError("");
+  }
+
+  async function confirmArchive(team: TeacherDashboardData["teams"][number]) {
+    const changed = await teamAction(
+      { action: "archive", teamId: team.id, confirmation: archiveConfirmation },
+      `${team.classNumber}반 ${team.name}을(를) 보관했습니다.`,
+    );
+    if (changed) {
+      setArchivingTeamId(null);
+      setArchiveConfirmation("");
+    }
   }
 
   async function resetPassword(studentId: string) {
@@ -109,9 +144,13 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
     });
     const result = (await response.json()) as { message?: string; credential?: Credential };
     setBusy(false);
-    if (!response.ok || !result.credential) return setError(result.message ?? "초기화하지 못했습니다.");
+    if (!response.ok || !result.credential) {
+      const text = result.message ?? "초기화하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
     setCredentials([result.credential]);
     setMessage("새 임시 비밀번호를 발급했습니다. 이 화면을 닫으면 다시 확인할 수 없습니다.");
+    showToast("새 임시 비밀번호를 발급했습니다.");
     await refresh();
   }
 
@@ -233,7 +272,10 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
               <select className="select" id="classFilter" value={classNumber} onChange={(event) => setClassNumber(Number(event.target.value))}>
                 {Array.from({ length: 9 }, (_, index) => index + 1).map((number) => <option key={number} value={number}>{number}반</option>)}
               </select>
-              <button className="button ghost" disabled={busy} onClick={() => teamAction({ action: "create", classNumber, teamNumber: Math.max(0, ...visibleTeams.map((team) => team.teamNumber)) + 1 })}>+ 팀 추가</button>
+              <button className="button ghost" disabled={busy} onClick={() => teamAction({ action: "create", classNumber, teamNumber: Math.max(0, ...visibleTeams.map((team) => team.teamNumber), ...visibleArchivedTeams.map((team) => team.teamNumber)) + 1 }, "새 팀을 만들었습니다.")}>+ 팀 추가</button>
+              <button className="button secondary" type="button" onClick={() => setShowArchived((value) => !value)} aria-expanded={showArchived}>
+                보관 팀 {visibleArchivedTeams.length}개
+              </button>
             </div>
           </div>
         </div>
@@ -250,13 +292,13 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
                       className="select"
                       value={student.teamId ?? ""}
                       disabled={busy}
-                      onChange={(event) => event.target.value ? teamAction({ action: "assign", studentId: student.id, teamId: event.target.value }) : student.teamId && teamAction({ action: "remove", studentId: student.id, teamId: student.teamId })}
+                      onChange={(event) => event.target.value ? teamAction({ action: "assign", studentId: student.id, teamId: event.target.value }, "학생의 팀 배정을 변경했습니다.") : student.teamId && teamAction({ action: "remove", studentId: student.id, teamId: student.teamId }, "학생을 팀에서 제외했습니다.")}
                     >
                       <option value="">미배정</option>
                       {visibleTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
                     </select>
                   </td>
-                  <td>{student.teamId ? <button className={`button ${student.isLeader ? "" : "secondary"}`} disabled={busy || student.isLeader} onClick={() => teamAction({ action: "leader", studentId: student.id, teamId: student.teamId })}>{student.isLeader ? "팀장" : "지정"}</button> : "—"}</td>
+                  <td>{student.teamId ? <button className={`button ${student.isLeader ? "" : "secondary"}`} disabled={busy || student.isLeader} onClick={() => teamAction({ action: "leader", studentId: student.id, teamId: student.teamId }, "팀장을 지정했습니다.")}>{student.isLeader ? "팀장" : "지정"}</button> : "—"}</td>
                   <td><span className={`badge ${student.mustChangePassword ? "pending" : ""}`}>{student.mustChangePassword ? "첫 로그인 전" : "사용 중"}</span></td>
                   <td><button className="button ghost" disabled={busy} onClick={() => resetPassword(student.id)}>비밀번호 초기화</button></td>
                 </tr>
@@ -264,6 +306,46 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
               {!visibleStudents.length ? <tr><td colSpan={6} className="empty-state">이 학급에 등록된 학생이 없습니다.</td></tr> : null}
             </tbody>
           </table>
+        </div>
+        <div className="card-body team-storage-section">
+          <h3 className="section-heading">현재 팀 관리</h3>
+          <div className="team-management-grid">
+            {visibleTeams.map((team) => (
+              <article className={`team-management-card ${archivingTeamId === team.id ? "confirming" : ""}`} key={team.id}>
+                <div className="team-management-main">
+                  <div><b>{team.name}</b><span>{team.memberCount}명 · {team.topic || "주제 탐색 중"}</span></div>
+                  <button className="button ghost" type="button" disabled={busy} onClick={() => startArchive(team.id)}>보관</button>
+                </div>
+                {archivingTeamId === team.id ? (
+                  <div className="archive-confirmation" role="group" aria-label={`${team.name} 보관 확인`}>
+                    <p>학생 화면과 기본 목록에서 숨기되 과거 자료와 팀원 이력은 보존합니다. 계속하려면 <b>{team.classNumber}반 {team.name}</b>을(를) 입력하세요.</p>
+                    <label className="sr-only" htmlFor={`archive-${team.id}`}>보관 확인 문구</label>
+                    <input id={`archive-${team.id}`} className="input" value={archiveConfirmation} onChange={(event) => setArchiveConfirmation(event.target.value)} autoComplete="off" placeholder={`${team.classNumber}반 ${team.name}`} />
+                    <div className="toolbar-group">
+                      <button className="button danger" type="button" disabled={busy || archiveConfirmation.trim() !== `${team.classNumber}반 ${team.name}`} onClick={() => confirmArchive(team)}>팀 보관</button>
+                      <button className="button secondary" type="button" disabled={busy} onClick={() => { setArchivingTeamId(null); setArchiveConfirmation(""); }}>취소</button>
+                    </div>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+            {!visibleTeams.length ? <p className="section-subtitle">현재 팀이 없습니다.</p> : null}
+          </div>
+          {showArchived ? (
+            <div className="archived-team-list" aria-label={`${classNumber}반 보관 팀`}>
+              <h3 className="section-heading">보관된 팀</h3>
+              <p className="section-subtitle">과거 자료와 팀원 이력은 유지됩니다. 복원하면 기본 목록과 학생 접근 조건에 다시 반영됩니다.</p>
+              {visibleArchivedTeams.map((team) => (
+                <article className="team-management-card archived" key={team.id}>
+                  <div className="team-management-main">
+                    <div><b>{team.name}</b><span>{team.memberCount}명 · {team.archivedByName ? `${team.archivedByName} 교사 보관` : "보관됨"}</span></div>
+                    <button className="button secondary" type="button" disabled={busy} onClick={() => teamAction({ action: "restore", teamId: team.id }, `${team.classNumber}반 ${team.name}을(를) 복원했습니다.`)}>복원</button>
+                  </div>
+                </article>
+              ))}
+              {!visibleArchivedTeams.length ? <p className="empty-state">이 학급에 보관된 팀이 없습니다.</p> : null}
+            </div>
+          ) : null}
         </div>
       </section>
 

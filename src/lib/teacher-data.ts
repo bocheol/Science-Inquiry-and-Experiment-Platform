@@ -36,6 +36,15 @@ export type TeacherDashboardData = {
     attention: AttentionLevel;
     attentionReasons: string[];
   }>;
+  archivedTeams: Array<{
+    id: string;
+    name: string;
+    teamNumber: number;
+    classNumber: number;
+    memberCount: number;
+    archivedAt: string | null;
+    archivedByName: string | null;
+  }>;
   counts: { students: number; teams: number; unassigned: number; pendingPlans: number };
 };
 
@@ -82,7 +91,7 @@ function attentionFor(team: {
 
 export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
   const db = await getDb();
-  const [studentResult, teamResult, memberCounts, messageCounts, journalCounts, materialRows] = await Promise.all([
+  const [studentResult, teamResult, archivedTeamResult, memberCounts, messageCounts, journalCounts, materialRows] = await Promise.all([
     db.query<{
       id: string; name: string; login_id: string; class_number: number; team_id: string | null;
       team_number: number | null; leader_user_id: string | null; must_change_password: boolean;
@@ -92,7 +101,7 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
          FROM users u
          JOIN classes c ON c.id = u.class_id
          LEFT JOIN team_members tm ON tm.user_id = u.id AND tm.status = 'active'
-         LEFT JOIN teams t ON t.id = tm.team_id
+         LEFT JOIN teams t ON t.id = tm.team_id AND t.status = 'active'
         WHERE u.role = 'student' AND u.status = 'active'
         ORDER BY c.class_number, u.login_id`,
     ),
@@ -111,6 +120,19 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
          LEFT JOIN inquiry_sessions s ON s.team_id = t.id
          LEFT JOIN investigation_plans p ON p.session_id = s.id
          LEFT JOIN reports r ON r.session_id = s.id
+        WHERE t.status = 'active'
+        ORDER BY c.class_number, t.team_number`,
+    ),
+    db.query<{
+      id: string; name: string; team_number: number; class_number: number;
+      archived_at: Date | string | null; archived_by_name: string | null;
+    }>(
+      `SELECT t.id, t.name, t.team_number, c.class_number, t.archived_at,
+              archiver.name AS archived_by_name
+         FROM teams t
+         JOIN classes c ON c.id = t.class_id
+         LEFT JOIN users archiver ON archiver.id = t.archived_by
+        WHERE t.status = 'archived'
         ORDER BY c.class_number, t.team_number`,
     ),
     db.query<{ team_id: string; count: string }>(
@@ -194,9 +216,20 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
     return { ...progress, ...attentionFor(progress) };
   });
 
+  const archivedTeams = archivedTeamResult.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    teamNumber: row.team_number,
+    classNumber: row.class_number,
+    memberCount: memberCountMap.get(row.id) ?? 0,
+    archivedAt: toIso(row.archived_at),
+    archivedByName: row.archived_by_name,
+  }));
+
   return {
     students,
     teams,
+    archivedTeams,
     counts: {
       students: students.length,
       teams: teams.length,

@@ -10,6 +10,7 @@ import {
   type StoredJournalPhoto,
 } from "@/lib/journal-drafts";
 import type { ExperimentJournal, JournalImage } from "@/lib/types";
+import { useToast } from "@/components/toast-provider";
 
 type DraftFields = Pick<StoredJournalDraft, "sessionNumber" | "date" | "activities" | "observations" | "reflections">;
 type PhotoWithPreview = StoredJournalPhoto & { previewUrl: string };
@@ -18,6 +19,7 @@ const today = () => new Date().toLocaleDateString("sv-SE");
 const blankFields = (sessionNumber = 1): DraftFields => ({ sessionNumber, date: today(), activities: "", observations: "", reflections: "" });
 
 export function JournalPanel({ sessionId, currentUserId }: { sessionId: string; currentUserId: string }) {
+  const { showToast } = useToast();
   const draftKey = `${sessionId}:${currentUserId}`;
   const [journals, setJournals] = useState<ExperimentJournal[]>([]);
   const [fields, setFields] = useState<DraftFields>(() => blankFields());
@@ -88,7 +90,8 @@ export function JournalPanel({ sessionId, currentUserId }: { sessionId: string; 
     setDirty(false);
     setPendingSync(false);
     setNotice(`${journal.sessionNumber}차시 일지를 저장했습니다.`);
-  }, [draftKey, revokePhotos]);
+    showToast(`${journal.sessionNumber}차시 실험 일지를 저장했습니다.`);
+  }, [draftKey, revokePhotos, showToast]);
 
   const makeStoredDraft = useCallback((pending: boolean): StoredJournalDraft => ({
     key: draftKey,
@@ -229,6 +232,7 @@ export function JournalPanel({ sessionId, currentUserId }: { sessionId: string; 
         await putJournalDraft({ ...queued, pendingSync: false });
       }
       setError(typed.message);
+      showToast(typed.message, "error");
       setNotice(typed.retriable ? "연결이 복구되면 자동으로 다시 전송합니다." : "작성 내용은 이 기기에 임시 저장되어 있습니다.");
     } finally {
       setBusy(false);

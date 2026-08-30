@@ -4,12 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { INQUIRY_FIELDS, PLAN_FIELDS } from "@/lib/constants";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { DocumentHistoryPanel } from "@/components/document-history-panel";
+import { useToast } from "@/components/toast-provider";
 
 type ScheduleRow = { period: string; location: string; content: string; materials: string };
 
 const statusText: Record<string, string> = { draft: "작성 중", pending: "승인 대기", feedback: "수정 요청", approved: "승인됨", reapproval_required: "재승인 필요" };
 
 export function PlanEditor({ data, currentUserId, onRefresh }: { data: InquiryData; currentUserId: string; onRefresh: () => Promise<void> }) {
+  const { showToast } = useToast();
   const [form, setForm] = useState<Record<string, unknown>>(data.plan.formData);
   const [editing, setEditing] = useState<string | null>(null);
   const [state, setState] = useState("");
@@ -31,7 +33,13 @@ export function PlanEditor({ data, currentUserId, onRefresh }: { data: InquiryDa
       body: JSON.stringify({ planId: data.plan.id, fieldKey, action }),
     });
     const result = (await response.json()) as { message?: string };
-    if (!response.ok) { if (!silent) setError(result.message ?? "이 항목을 편집할 수 없습니다."); return false; }
+    if (!response.ok) {
+      if (!silent) {
+        const text = result.message ?? "이 항목을 편집할 수 없습니다.";
+        setError(text); showToast(text, "error");
+      }
+      return false;
+    }
     if (action === "acquire") setEditing(fieldKey);
     return true;
   }
@@ -43,7 +51,10 @@ export function PlanEditor({ data, currentUserId, onRefresh }: { data: InquiryDa
       body: JSON.stringify({ planId: data.plan.id, fieldKey, value }),
     });
     const result = (await response.json()) as { message?: string };
-    if (!response.ok) { setState(""); return setError(result.message ?? "저장하지 못했습니다."); }
+    if (!response.ok) {
+      const text = result.message ?? "저장하지 못했습니다.";
+      setState(""); setError(text); showToast(text, "error"); return;
+    }
     setState("저장됨");
     await lock(fieldKey, "release", true);
     setEditing(null);
@@ -59,7 +70,11 @@ export function PlanEditor({ data, currentUserId, onRefresh }: { data: InquiryDa
       body: JSON.stringify({ planId: data.plan.id, action: "submit" }),
     });
     const result = (await response.json()) as { message?: string };
-    if (!response.ok) return setError(result.message ?? "제출하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "제출하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    showToast("탐구 계획서를 제출했습니다.");
     await onRefresh();
   }
 
@@ -72,6 +87,7 @@ export function PlanEditor({ data, currentUserId, onRefresh }: { data: InquiryDa
     const result = (await response.json()) as { message?: string };
     if (!response.ok) { setState(""); throw new Error(result.message ?? "복원하지 못했습니다."); }
     setState("복원됨");
+    showToast("탐구 계획서를 선택한 이력으로 복원했습니다.");
     await onRefresh();
   }
 

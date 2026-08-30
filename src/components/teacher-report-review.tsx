@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import { REPORT_FIELDS } from "@/lib/constants";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { DocumentHistoryPanel } from "@/components/document-history-panel";
+import { useToast } from "@/components/toast-provider";
 
 const statusText: Record<string, string> = { draft: "작성 중", submitted: "검토 대기", feedback: "수정 요청", reviewed: "확인 완료" };
 
 export function TeacherReportReview({ data }: { data: InquiryData }) {
   const router = useRouter();
+  const { showToast } = useToast();
   const [feedback, setFeedback] = useState(data.report.teacherFeedback ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -25,8 +27,12 @@ export function TeacherReportReview({ data }: { data: InquiryData }) {
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "검토 결과를 저장하지 못했습니다.");
-    setMessage(decision === "reviewed" ? "보고서 확인을 완료했습니다." : "학생 팀에 수정 요청을 보냈습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "검토 결과를 저장하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    const success = decision === "reviewed" ? "보고서 확인을 완료했습니다." : "학생 팀에 수정 요청을 보냈습니다.";
+    setMessage(success); showToast(success);
     router.refresh();
   }
 
@@ -38,6 +44,7 @@ export function TeacherReportReview({ data }: { data: InquiryData }) {
     const result = (await response.json()) as { message?: string };
     if (!response.ok) throw new Error(result.message ?? "보고서를 복원하지 못했습니다.");
     setMessage("선택한 보고서 상태로 복원했습니다. 학생이 다시 제출하면 검토해 주세요.");
+    showToast("보고서를 선택한 이력으로 복원했습니다.");
     router.refresh();
   }
 

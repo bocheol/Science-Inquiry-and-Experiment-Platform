@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { REPORT_FIELDS } from "@/lib/constants";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { DocumentHistoryPanel } from "@/components/document-history-panel";
+import { useToast } from "@/components/toast-provider";
 
 const statusText: Record<string, string> = {
   draft: "작성 중",
@@ -13,6 +14,7 @@ const statusText: Record<string, string> = {
 };
 
 export function ReportEditor({ data, currentUserId, onRefresh }: { data: InquiryData; currentUserId: string; onRefresh: () => Promise<void> }) {
+  const { showToast } = useToast();
   const [form, setForm] = useState<Record<string, unknown>>({ title: data.session.selectedTopic ?? "", ...data.report.formData });
   const [roles, setRoles] = useState(() => new Map(data.report.roles.map((role) => [role.userId, role.description])));
   const [editing, setEditing] = useState<string | null>(null);
@@ -41,7 +43,10 @@ export function ReportEditor({ data, currentUserId, onRefresh }: { data: Inquiry
     });
     const result = (await response.json()) as { message?: string };
     if (!response.ok) {
-      if (!silent) setError(result.message ?? "이 항목을 편집할 수 없습니다.");
+      if (!silent) {
+        const text = result.message ?? "이 항목을 편집할 수 없습니다.";
+        setError(text); showToast(text, "error");
+      }
       return false;
     }
     if (action === "acquire") setEditing(fieldKey);
@@ -56,7 +61,10 @@ export function ReportEditor({ data, currentUserId, onRefresh }: { data: Inquiry
       body: JSON.stringify({ kind: "field", reportId: data.report.id, fieldKey, value }),
     });
     const result = (await response.json()) as { message?: string };
-    if (!response.ok) { setState(""); return setError(result.message ?? "저장하지 못했습니다."); }
+    if (!response.ok) {
+      const text = result.message ?? "저장하지 못했습니다.";
+      setState(""); setError(text); showToast(text, "error"); return;
+    }
     setState("저장됨");
     await lock(fieldKey, "release", true);
     setEditing(null);
@@ -72,7 +80,10 @@ export function ReportEditor({ data, currentUserId, onRefresh }: { data: Inquiry
       body: JSON.stringify({ kind: "role", reportId: data.report.id, userId, value }),
     });
     const result = (await response.json()) as { message?: string };
-    if (!response.ok) { setState(""); return setError(result.message ?? "역할을 저장하지 못했습니다."); }
+    if (!response.ok) {
+      const text = result.message ?? "역할을 저장하지 못했습니다.";
+      setState(""); setError(text); showToast(text, "error"); return;
+    }
     setState("저장됨");
     await lock(fieldKey, "release", true);
     setEditing(null);
@@ -87,8 +98,12 @@ export function ReportEditor({ data, currentUserId, onRefresh }: { data: Inquiry
       body: JSON.stringify({ reportId: data.report.id, action: "submit" }),
     });
     const result = (await response.json()) as { message?: string };
-    if (!response.ok) { setState(""); return setError(result.message ?? "제출하지 못했습니다."); }
+    if (!response.ok) {
+      const text = result.message ?? "제출하지 못했습니다.";
+      setState(""); setError(text); showToast(text, "error"); return;
+    }
     setState("제출됨");
+    showToast("팀 최종보고서를 제출했습니다.");
     await onRefresh();
   }
 
@@ -102,6 +117,7 @@ export function ReportEditor({ data, currentUserId, onRefresh }: { data: Inquiry
     const result = (await response.json()) as { message?: string };
     if (!response.ok) { setState(""); throw new Error(result.message ?? "복원하지 못했습니다."); }
     setState("복원됨");
+    showToast("팀 최종보고서를 선택한 이력으로 복원했습니다.");
     await onRefresh();
   }
 

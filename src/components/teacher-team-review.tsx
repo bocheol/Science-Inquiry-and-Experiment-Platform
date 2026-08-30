@@ -7,11 +7,13 @@ import { TeacherJournalReview } from "@/components/teacher-journal-review";
 import { TeacherReportReview } from "@/components/teacher-report-review";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { DocumentHistoryPanel } from "@/components/document-history-panel";
+import { useToast } from "@/components/toast-provider";
 
 const statusText: Record<string, string> = { draft: "작성 중", pending: "승인 대기", feedback: "수정 요청", approved: "승인됨", reapproval_required: "재승인 필요" };
 
 export function TeacherTeamReview({ data }: { data: InquiryData }) {
   const router = useRouter();
+  const { showToast } = useToast();
   const [feedback, setFeedback] = useState(data.plan.teacherFeedback ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -28,8 +30,12 @@ export function TeacherTeamReview({ data }: { data: InquiryData }) {
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "검토 결과를 저장하지 못했습니다.");
-    setMessage(decision === "approved" ? "계획서를 승인했습니다." : "학생 팀에 수정 요청을 보냈습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "검토 결과를 저장하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    const success = decision === "approved" ? "계획서를 승인했습니다." : "학생 팀에 수정 요청을 보냈습니다.";
+    setMessage(success); showToast(success);
     setChangingApprovedPlan(false);
     setConfirmation("");
     router.refresh();
@@ -43,6 +49,7 @@ export function TeacherTeamReview({ data }: { data: InquiryData }) {
     const result = (await response.json()) as { message?: string };
     if (!response.ok) throw new Error(result.message ?? "계획서를 복원하지 못했습니다.");
     setMessage("선택한 계획서 상태로 복원했습니다. 학생이 다시 제출하면 승인해 주세요.");
+    showToast("계획서를 선택한 이력으로 복원했습니다.");
     router.refresh();
   }
 
@@ -55,8 +62,12 @@ export function TeacherTeamReview({ data }: { data: InquiryData }) {
     });
     const result = (await response.json()) as { message?: string; syncStatus?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "재전송하지 못했습니다.");
-    setMessage(result.syncStatus === "synced" ? "Google Sheet에 반영했습니다." : "신청은 보존되어 있으며 시트 연결을 기다리고 있습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "재전송하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    const success = result.syncStatus === "synced" ? "Google Sheet에 반영했습니다." : "신청은 보존되어 있으며 시트 연결을 기다리고 있습니다.";
+    setMessage(success); showToast(success);
     router.refresh();
   }
 

@@ -42,10 +42,17 @@ beforeAll(async () => {
     [teamId, ownerId],
   );
   await db.query("INSERT INTO inquiry_sessions (id, team_id, stage) VALUES ($1, $2, 'EXPERIMENTING')", [sessionId, teamId]);
+  await db.query("INSERT INTO investigation_plans (id, session_id, review_status) VALUES ('journal_test_plan', $1, 'approved')", [sessionId]);
   await db.query(
     `INSERT INTO team_members (id, team_id, user_id, status) VALUES
       ($1, $2, $3, 'active'), ($4, $2, $5, 'active')`,
     [createId("member"), teamId, ownerId, createId("member"), peerId],
+  );
+  await db.query(
+    `INSERT INTO material_requests
+      (id, submission_id, session_id, team_id, submitted_by, form_data, total_amount, budget_status, sync_status)
+     VALUES ('journal_test_material', 'journal-test-submission', $1, $2, $3, '[]', 0, 'within_budget', 'pending')`,
+    [sessionId, teamId, ownerId],
   );
 });
 
@@ -54,6 +61,18 @@ describe("personal experiment journal access", () => {
     expect(detectJournalImageType(Buffer.from([0xff, 0xd8, 0xff, 0x00]))).toBe("image/jpeg");
     expect(detectJournalImageType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe("image/png");
     expect(detectJournalImageType(Buffer.from("not-an-image"))).toBeNull();
+  });
+
+  it("requires both plan approval and a saved material request", async () => {
+    const db = await getDb();
+    await db.query("DELETE FROM material_requests WHERE id = 'journal_test_material'");
+    await expect(listStudentJournals(owner, sessionId)).rejects.toMatchObject({ status: 403 } satisfies Partial<JournalAccessError>);
+    await db.query(
+      `INSERT INTO material_requests
+        (id, submission_id, session_id, team_id, submitted_by, form_data, total_amount, budget_status, sync_status)
+       VALUES ('journal_test_material', 'journal-test-submission', $1, $2, $3, '[]', 0, 'within_budget', 'pending')`,
+      [sessionId, teamId, ownerId],
+    );
   });
 
   it("keeps journals private, retries photos idempotently, and preserves removed student records for teachers", async () => {

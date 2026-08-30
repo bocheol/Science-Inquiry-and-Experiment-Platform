@@ -40,7 +40,7 @@ export async function saveAndSyncMaterials(input: {
     `SELECT c.class_number, t.team_number, leader.name AS leader_name, leader.login_id AS leader_login_id
        FROM teams t JOIN classes c ON c.id = t.class_id
        LEFT JOIN users leader ON leader.id = t.leader_user_id
-      WHERE t.id = $1`,
+      WHERE t.id = $1 AND t.status = 'active'`,
     [input.teamId],
   );
   const team = context.rows[0];

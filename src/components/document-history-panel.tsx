@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useToast } from "@/components/toast-provider";
 
 type HistoryItem = { id: string; action: string; actorName: string; createdAt: string };
 
@@ -29,6 +30,7 @@ export function DocumentHistoryPanel({
   canRestore: boolean;
   onRestore: (revisionId: string) => Promise<void>;
 }) {
+  const { showToast } = useToast();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -37,7 +39,10 @@ export function DocumentHistoryPanel({
     setBusyId(item.id);
     setError("");
     try { await onRestore(item.id); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "복원하지 못했습니다."); }
+    catch (caught) {
+      const text = caught instanceof Error ? caught.message : "복원하지 못했습니다.";
+      setError(text); showToast(text, "error");
+    }
     finally { setBusyId(null); }
   }
 

@@ -7,6 +7,7 @@ import type {
   PeerEvaluationValue,
   SelfEvaluationValue,
 } from "@/lib/evaluation-service";
+import { useToast } from "@/components/toast-provider";
 
 type EvaluationData = {
   round: {
@@ -102,6 +103,7 @@ function EvaluationChoices<T extends PeerEvaluationValue | SelfEvaluationValue>(
 }
 
 function SelfEvaluationForm({ data, onSaved }: { data: EvaluationData; onSaved: () => Promise<void> }) {
+  const { showToast } = useToast();
   const initial = data.selfEvaluation;
   const [responses, setResponses] = useState<EvaluationResponse<SelfEvaluationValue>[]>(
     initial?.responses.length ? initial.responses : emptyResponses(data.round.template.items, 3),
@@ -132,8 +134,12 @@ function SelfEvaluationForm({ data, onSaved }: { data: EvaluationData; onSaved: 
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "자기평가를 저장하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "자기평가를 저장하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
     setMessage("자기평가를 저장했습니다. 평가가 열려 있는 동안 다시 수정할 수 있습니다.");
+    showToast("자기평가를 저장했습니다.");
     await onSaved();
   }
 
@@ -176,6 +182,7 @@ function SelfEvaluationForm({ data, onSaved }: { data: EvaluationData; onSaved: 
 }
 
 function PeerEvaluationForm({ data, teammate, onSaved }: { data: EvaluationData; teammate: EvaluationData["teammates"][number]; onSaved: () => Promise<void> }) {
+  const { showToast } = useToast();
   const saved = data.peerEvaluations.find((evaluation) => evaluation.evaluateeId === teammate.id);
   const [responses, setResponses] = useState<EvaluationResponse<PeerEvaluationValue>[]>(
     saved?.responses.length ? saved.responses : emptyResponses(data.round.template.items, 3),
@@ -209,8 +216,12 @@ function PeerEvaluationForm({ data, teammate, onSaved }: { data: EvaluationData;
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "동료평가를 저장하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "동료평가를 저장하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
     setMessage(`${teammate.name} 학생에 대한 평가를 저장했습니다.`);
+    showToast("동료평가를 저장했습니다.");
     setConfirmed(false);
     await onSaved();
   }

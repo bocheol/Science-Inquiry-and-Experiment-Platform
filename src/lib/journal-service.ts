@@ -96,14 +96,20 @@ async function assertActiveStudentSession(client: PoolClient, studentId: string,
     `SELECT 1
        FROM inquiry_sessions s
        JOIN team_members tm ON tm.team_id = s.team_id
+       JOIN teams t ON t.id = s.team_id
+       JOIN investigation_plans p ON p.session_id = s.id
+       LEFT JOIN material_requests mr ON mr.session_id = s.id
       WHERE s.id = $1
         AND tm.user_id = $2
         AND tm.status = 'active'
+        AND t.status = 'active'
+        AND p.review_status = 'approved'
+        AND mr.id IS NOT NULL
         AND s.stage IN ('EXPERIMENTING', 'REPORTING', 'EXAMINING', 'EVALUATING', 'COMPLETED')
       LIMIT 1`,
     [sessionId, studentId],
   );
-  if (!result.rows[0]) throw new JournalAccessError("승인된 현재 팀의 실험 일지에 접근할 수 없습니다.", 403);
+  if (!result.rows[0]) throw new JournalAccessError("계획 승인과 준비물 신청을 완료한 현재 팀만 실험 일지에 접근할 수 있습니다.", 403);
 }
 
 async function readJournals(client: PoolClient, sessionId: string, studentIds?: string[]) {

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { EvaluationItem, EvaluationManagementData } from "@/lib/evaluation-service";
+import { useToast } from "@/components/toast-provider";
 
 const statusLabels: Record<string, string> = {
   draft: "설정 중",
@@ -19,6 +20,7 @@ const flagLabels: Record<string, string> = {
 };
 
 export function TeacherEvaluationManager({ initialData }: { initialData: EvaluationManagementData }) {
+  const { showToast } = useToast();
   const [data, setData] = useState(initialData);
   const [classNumber, setClassNumber] = useState(initialData.classNumber);
   const [selectedRoundId, setSelectedRoundId] = useState(initialData.selected?.id ?? "");
@@ -68,9 +70,11 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
       const roundId = result.roundId ?? selectedRoundId;
       setSelectedRoundId(roundId);
       setMessage(successMessage);
+      showToast(successMessage);
       await refresh(classNumber, roundId);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "평가를 처리하지 못했습니다.");
+      const text = cause instanceof Error ? cause.message : "평가를 처리하지 못했습니다.";
+      setError(text); showToast(text, "error");
     } finally {
       setBusy(false);
     }

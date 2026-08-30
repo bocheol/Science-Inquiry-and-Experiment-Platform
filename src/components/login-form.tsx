@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useToast } from "@/components/toast-provider";
 
 export function LoginForm() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -24,9 +26,12 @@ export function LoginForm() {
     const result = (await response.json()) as { ok?: boolean; message?: string; destination?: string };
     setLoading(false);
     if (!response.ok) {
-      setError(result.message ?? "로그인할 수 없습니다.");
+      const text = result.message ?? "로그인할 수 없습니다.";
+      setError(text);
+      showToast(text, "error");
       return;
     }
+    showToast("로그인되었습니다.");
     router.replace(result.destination ?? "/");
     router.refresh();
   }
@@ -53,4 +58,3 @@ export function LoginForm() {
     </form>
   );
 }
-

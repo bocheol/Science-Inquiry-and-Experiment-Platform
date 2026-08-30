@@ -98,8 +98,8 @@ export async function getDocumentHistory(documentType: DocumentType, documentId:
 
 async function assertRestorePermission(db: Queryable, documentType: DocumentType, documentId: string, actorId: string) {
   const table = documentType === "plan" ? "investigation_plans" : "reports";
-  const result = await db.query<{ role: string; leader_user_id: string | null; active_member: boolean }>(
-    `SELECT u.role, t.leader_user_id, (tm.user_id IS NOT NULL) AS active_member
+  const result = await db.query<{ role: string; leader_user_id: string | null; team_status: string; active_member: boolean }>(
+    `SELECT u.role, t.leader_user_id, t.status AS team_status, (tm.user_id IS NOT NULL) AS active_member
        FROM users u
        JOIN ${table} d ON d.id = $1
        JOIN inquiry_sessions s ON s.id = d.session_id
@@ -109,7 +109,7 @@ async function assertRestorePermission(db: Queryable, documentType: DocumentType
     [documentId, actorId],
   );
   const row = result.rows[0];
-  if (!row || (row.role !== "teacher" && !(row.active_member && row.leader_user_id === actorId))) {
+  if (!row || (row.role !== "teacher" && !(row.team_status === "active" && row.active_member && row.leader_user_id === actorId))) {
     throw new Error("복원은 교사 또는 현재 팀장만 할 수 있습니다.");
   }
 }

@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { useToast } from "@/components/toast-provider";
 
 type Message = { role: "teacher" | "guide"; content: string; sources?: string[] };
 
 export function TeacherHelpChatbot() {
+  const { showToast } = useToast();
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<Message[]>([
     { role: "guide", content: "플랫폼 사용법을 물어보세요. 공식 기능 안내 범위에서만 답합니다." },
@@ -23,7 +25,10 @@ export function TeacherHelpChatbot() {
     });
     const result = (await response.json()) as { answer?: string; sources?: string[]; message?: string };
     setBusy(false);
-    if (!response.ok || !result.answer) return setError(result.message ?? "안내를 불러오지 못했습니다.");
+    if (!response.ok || !result.answer) {
+      const text = result.message ?? "안내를 불러오지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
     setMessages((current) => [...current, { role: "guide", content: result.answer!, sources: result.sources }]);
   }
 

@@ -181,7 +181,7 @@ async function prepareClassSources(classNumber: number) {
        JOIN inquiry_sessions s ON s.team_id = t.id
        LEFT JOIN investigation_plans p ON p.session_id = s.id
        LEFT JOIN reports r ON r.session_id = s.id
-      WHERE t.class_id = $1
+      WHERE t.class_id = $1 AND t.status = 'active'
       ORDER BY t.team_number`,
     [classId],
   );
@@ -197,7 +197,7 @@ async function prepareClassSources(classNumber: number) {
        LEFT JOIN inquiry_sessions s ON s.team_id = t.id
        LEFT JOIN reports r ON r.session_id = s.id
        LEFT JOIN report_member_roles rmr ON rmr.report_id = r.id AND rmr.user_id = u.id
-      WHERE t.class_id = $1 AND tm.status = 'active' AND u.status = 'active'
+      WHERE t.class_id = $1 AND t.status = 'active' AND tm.status = 'active' AND u.status = 'active'
       ORDER BY tm.team_id, u.login_id`,
     [classId],
   );
@@ -207,7 +207,7 @@ async function prepareClassSources(classNumber: number) {
        JOIN reports r ON r.id = rf.report_id
        JOIN inquiry_sessions s ON s.id = r.session_id
        JOIN teams t ON t.id = s.team_id
-      WHERE t.class_id = $1`,
+      WHERE t.class_id = $1 AND t.status = 'active'`,
     [classId],
   );
   const journals = await db.query<{
@@ -219,7 +219,7 @@ async function prepareClassSources(classNumber: number) {
        JOIN inquiry_sessions s ON s.id = j.session_id
        JOIN teams t ON t.id = s.team_id
        JOIN team_members tm ON tm.team_id = t.id AND tm.user_id = j.student_id AND tm.status = 'active'
-      WHERE t.class_id = $1
+      WHERE t.class_id = $1 AND t.status = 'active'
       ORDER BY s.team_id, j.student_id, j.session_number`,
     [classId],
   );
@@ -683,9 +683,10 @@ export async function getPublishedStudentExamResult(studentId: string) {
        FROM exams e
        JOIN exam_sets es ON es.id = e.exam_set_id
        JOIN inquiry_sessions s ON s.id = e.session_id
+       JOIN teams t ON t.id = s.team_id
        JOIN team_members tm ON tm.team_id = s.team_id AND tm.user_id = e.student_id AND tm.status = 'active'
        JOIN exam_results er ON er.exam_id = e.id
-      WHERE e.student_id = $1 AND e.status = 'published' AND er.published_at IS NOT NULL
+      WHERE e.student_id = $1 AND e.status = 'published' AND er.published_at IS NOT NULL AND t.status = 'active'
       ORDER BY er.published_at DESC LIMIT 1`,
     [studentId],
   );

@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { InstallAppGuide } from "@/components/install-app-guide";
 import { LoginForm } from "@/components/login-form";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -20,9 +21,9 @@ export default async function LoginPage() {
           <h2>탐구실 입장</h2>
           <p>교사에게 받은 아이디와 비밀번호를 입력하세요.</p>
           <LoginForm />
+          <InstallAppGuide />
         </div>
       </section>
     </main>
   );
 }
-

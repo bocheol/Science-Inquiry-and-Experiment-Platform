@@ -20,7 +20,8 @@ export async function assertStudentReportAccess(userId: string, reportId: string
        FROM reports r
        JOIN inquiry_sessions s ON s.id = r.session_id
        JOIN team_members tm ON tm.team_id = s.team_id
-      WHERE r.id = $1 AND tm.user_id = $2 AND tm.status = 'active'`,
+       JOIN teams t ON t.id = s.team_id
+      WHERE r.id = $1 AND tm.user_id = $2 AND tm.status = 'active' AND t.status = 'active'`,
     [reportId, userId],
   );
   const report = result.rows[0];

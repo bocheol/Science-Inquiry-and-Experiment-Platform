@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useToast } from "@/components/toast-provider";
 import type { InquiryData } from "@/lib/inquiry-data";
 
 export function ChatPanel({ data, onRefresh }: { data: InquiryData; onRefresh: () => Promise<void> }) {
+  const { showToast } = useToast();
   const [interest, setInterest] = useState(data.session.interestInput ?? "");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,7 +23,11 @@ export function ChatPanel({ data, onRefresh }: { data: InquiryData; onRefresh: (
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "탐구 방향을 만들지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "탐구 방향을 만들지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    showToast("탐구 방향 3개를 만들었습니다.");
     await onRefresh();
   }
 
@@ -33,7 +39,11 @@ export function ChatPanel({ data, onRefresh }: { data: InquiryData; onRefresh: (
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "주제를 선택하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "주제를 선택하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    showToast("탐구 방향이 설정되었습니다.");
     await onRefresh();
   }
 
@@ -48,7 +58,11 @@ export function ChatPanel({ data, onRefresh }: { data: InquiryData; onRefresh: (
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) { setMessage(content); return setError(result.message ?? "질문을 보내지 못했습니다."); }
+    if (!response.ok) {
+      const text = result.message ?? "질문을 보내지 못했습니다.";
+      setMessage(content); setError(text); showToast(text, "error"); return;
+    }
+    showToast("질문을 보냈습니다.");
     await onRefresh();
   }
 
@@ -96,4 +110,3 @@ export function ChatPanel({ data, onRefresh }: { data: InquiryData; onRefresh: (
     </div>
   );
 }
-

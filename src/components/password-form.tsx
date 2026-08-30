@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useToast } from "@/components/toast-provider";
 
 export function PasswordForm() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -15,6 +17,7 @@ export function PasswordForm() {
     const confirmPassword = String(data.get("confirmPassword") ?? "");
     if (newPassword !== confirmPassword) {
       setError("새 비밀번호가 서로 다릅니다.");
+      showToast("새 비밀번호가 서로 다릅니다.", "error");
       return;
     }
     setLoading(true);
@@ -26,7 +29,11 @@ export function PasswordForm() {
     });
     const result = (await response.json()) as { message?: string; destination?: string };
     setLoading(false);
-    if (!response.ok) return setError(result.message ?? "비밀번호를 변경하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "비밀번호를 변경하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    showToast("비밀번호를 변경했습니다.");
     router.replace(result.destination ?? "/");
     router.refresh();
   }
@@ -47,4 +54,3 @@ export function PasswordForm() {
     </form>
   );
 }
-

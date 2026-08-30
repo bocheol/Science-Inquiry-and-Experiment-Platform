@@ -21,6 +21,13 @@ export async function createTeam(actorId: string, classNumber: number, teamNumbe
   );
   const classId = classResult.rows[0]?.id;
   if (!classId) throw new Error("학급을 찾을 수 없습니다.");
+  const existing = await db.query<{ status: string }>(
+    "SELECT status FROM teams WHERE class_id = $1 AND team_number = $2",
+    [classId, teamNumber],
+  );
+  if (existing.rows[0]?.status === "archived") {
+    throw new Error("같은 조 번호의 보관된 팀이 있습니다. 보관 팀 목록에서 먼저 복원해 주세요.");
+  }
   const teamId = `team_${Number(process.env.ACADEMIC_YEAR ?? 2026)}_${classNumber}_${teamNumber}`;
   await db.query(
     `INSERT INTO teams (id, class_id, team_number, name) VALUES ($1, $2, $3, $4)
@@ -36,7 +43,7 @@ export async function assignStudent(actorId: string, studentId: string, teamId: 
   const db = await getDb();
   const valid = await db.query(
     `SELECT u.id FROM users u JOIN teams t ON t.class_id = u.class_id
-      WHERE u.id = $1 AND t.id = $2 AND u.role = 'student'`,
+      WHERE u.id = $1 AND t.id = $2 AND u.role = 'student' AND t.status = 'active'`,
     [studentId, teamId],
   );
   if (!valid.rows[0]) throw new Error("학생과 팀의 학급이 다릅니다.");
@@ -71,10 +78,43 @@ export async function removeStudent(actorId: string, studentId: string, teamId: 
 export async function setTeamLeader(actorId: string, teamId: string, studentId: string) {
   const db = await getDb();
   const membership = await db.query(
-    "SELECT id FROM team_members WHERE team_id = $1 AND user_id = $2 AND status = 'active'",
+    `SELECT tm.id FROM team_members tm JOIN teams t ON t.id = tm.team_id
+      WHERE tm.team_id = $1 AND tm.user_id = $2 AND tm.status = 'active' AND t.status = 'active'`,
     [teamId, studentId],
   );
   if (!membership.rows[0]) throw new Error("현재 팀원만 팀장이 될 수 있습니다.");
   await db.query("UPDATE teams SET leader_user_id = $1 WHERE id = $2", [studentId, teamId]);
   await audit(actorId, "team_leader_set", "team", teamId, { studentId });
+}
+
+export async function archiveTeam(actorId: string, teamId: string, confirmation: string) {
+  const db = await getDb();
+  const result = await db.query<{ name: string; class_number: number; status: string }>(
+    `SELECT t.name, c.class_number, t.status
+       FROM teams t JOIN classes c ON c.id = t.class_id
+      WHERE t.id = $1`,
+    [teamId],
+  );
+  const team = result.rows[0];
+  if (!team) throw new Error("팀을 찾을 수 없습니다.");
+  if (team.status !== "active") throw new Error("이미 보관된 팀입니다.");
+  const expected = `${team.class_number}반 ${team.name}`;
+  if (confirmation.trim() !== expected) throw new Error(`확인 문구로 '${expected}'을(를) 정확히 입력해 주세요.`);
+  await db.query(
+    `UPDATE teams SET status = 'archived', archived_at = CURRENT_TIMESTAMP, archived_by = $1
+      WHERE id = $2 AND status = 'active'`,
+    [actorId, teamId],
+  );
+  await audit(actorId, "team_archived", "team", teamId, { confirmationMatched: true });
+}
+
+export async function restoreTeam(actorId: string, teamId: string) {
+  const db = await getDb();
+  const restored = await db.query<{ id: string }>(
+    `UPDATE teams SET status = 'active', archived_at = NULL, archived_by = NULL
+      WHERE id = $1 AND status = 'archived' RETURNING id`,
+    [teamId],
+  );
+  if (!restored.rows[0]) throw new Error("보관된 팀을 찾을 수 없습니다.");
+  await audit(actorId, "team_restored", "team", teamId);
 }

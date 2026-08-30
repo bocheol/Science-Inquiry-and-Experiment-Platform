@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ExamDifficulty, ExamManagementData, ExamPaper, ExamQuestion } from "@/lib/exam-service";
+import { useToast } from "@/components/toast-provider";
 
 const scopeText = { common: "전체 공통", team: "팀 공통", individual: "개인화" } as const;
 const difficultyText = { basic: "기본", standard: "보통", advanced: "심화" } as const;
@@ -16,6 +17,7 @@ function paperQuestions(data: NonNullable<ExamManagementData["selected"]>, paper
 }
 
 function QuestionEditor({ question, disabled, onChanged }: { question: ExamQuestion; disabled: boolean; onChanged: () => Promise<void> }) {
+  const { showToast } = useToast();
   const [stimulus, setStimulus] = useState(question.stimulus);
   const [prompt, setPrompt] = useState(question.question);
   const [competency, setCompetency] = useState(question.competency);
@@ -43,7 +45,11 @@ function QuestionEditor({ question, disabled, onChanged }: { question: ExamQuest
     });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "문항을 저장하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "문항을 저장하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    showToast("시험 문항을 저장했습니다.");
     await onChanged();
   }
 
@@ -53,7 +59,11 @@ function QuestionEditor({ question, disabled, onChanged }: { question: ExamQuest
     const response = await fetch(`/api/teacher/exams?questionId=${encodeURIComponent(question.id)}`, { method: "DELETE" });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "문항을 삭제하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "문항을 삭제하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    showToast("같은 범주의 문항 슬롯을 삭제했습니다.");
     await onChanged();
   }
 
@@ -79,6 +89,7 @@ function QuestionEditor({ question, disabled, onChanged }: { question: ExamQuest
 }
 
 export function TeacherExamManager({ initialData }: { initialData: ExamManagementData }) {
+  const { showToast } = useToast();
   const [data, setData] = useState(initialData);
   const [classNumber, setClassNumber] = useState(9);
   const [selectedExamId, setSelectedExamId] = useState(initialData.selected?.papers[0]?.examId ?? "");
@@ -125,8 +136,12 @@ export function TeacherExamManager({ initialData }: { initialData: ExamManagemen
     });
     const result = (await response.json()) as { message?: string; examSetId?: string };
     setBusy(false);
-    if (!response.ok || !result.examSetId) return setError(result.message ?? "시험 문제를 생성하지 못했습니다.");
+    if (!response.ok || !result.examSetId) {
+      const text = result.message ?? "시험 문제를 생성하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
     setMessage("초안 생성이 끝났습니다. 학생별 문항과 출제 근거를 확인해 주세요.");
+    showToast("시험 문제 초안을 생성했습니다.");
     await load(classNumber, result.examSetId);
   }
 
@@ -135,8 +150,12 @@ export function TeacherExamManager({ initialData }: { initialData: ExamManagemen
     const response = await fetch("/api/teacher/exams", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const result = (await response.json()) as { message?: string };
     setBusy(false);
-    if (!response.ok) return setError(result.message ?? "처리하지 못했습니다.");
+    if (!response.ok) {
+      const text = result.message ?? "처리하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
     setMessage(success);
+    showToast(success);
     await load(classNumber, selected?.id);
   }
 

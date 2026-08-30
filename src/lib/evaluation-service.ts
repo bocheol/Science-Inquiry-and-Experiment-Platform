@@ -284,7 +284,7 @@ export async function changeEvaluationRoundStatus(
     );
     await db.query(
       `UPDATE inquiry_sessions SET stage = 'EVALUATING', last_activity_at = CURRENT_TIMESTAMP
-        WHERE team_id IN (SELECT id FROM teams WHERE class_id = $1) AND stage <> 'COMPLETED'`,
+        WHERE team_id IN (SELECT id FROM teams WHERE class_id = $1 AND status = 'active') AND stage <> 'COMPLETED'`,
       [round.class_id],
     );
   } else {
@@ -310,7 +310,7 @@ async function activeMemberContext(studentId: string): Promise<MemberContext> {
        JOIN teams t ON t.id = tm.team_id
        JOIN inquiry_sessions s ON s.team_id = t.id
        JOIN users u ON u.id = tm.user_id
-      WHERE tm.user_id = $1 AND tm.status = 'active' AND u.status = 'active'
+      WHERE tm.user_id = $1 AND tm.status = 'active' AND u.status = 'active' AND t.status = 'active'
       ORDER BY tm.joined_at DESC LIMIT 1`,
     [studentId],
   );
@@ -486,7 +486,7 @@ export async function saveEvaluationTeacherSummary(
     `SELECT s.id AS session_id
        FROM users u JOIN team_members tm ON tm.user_id = u.id JOIN teams t ON t.id = tm.team_id
        JOIN inquiry_sessions s ON s.team_id = t.id
-      WHERE u.id = $1 AND t.class_id = $2 ORDER BY tm.joined_at DESC LIMIT 1`,
+      WHERE u.id = $1 AND t.class_id = $2 AND t.status = 'active' ORDER BY tm.joined_at DESC LIMIT 1`,
     [input.studentId, round.class_id],
   );
   if (!target.rows[0]) throw new EvaluationServiceError("평가 대상 학생을 찾을 수 없습니다.", 404);
@@ -512,7 +512,7 @@ export async function publishEvaluationRound(teacherId: string, roundId: string)
     `SELECT u.id AS student_id, s.id AS session_id
        FROM users u JOIN team_members tm ON tm.user_id = u.id JOIN teams t ON t.id = tm.team_id
        JOIN inquiry_sessions s ON s.team_id = t.id
-      WHERE t.class_id = $1 AND tm.status = 'active' AND u.status = 'active'
+      WHERE t.class_id = $1 AND t.status = 'active' AND tm.status = 'active' AND u.status = 'active'
       ORDER BY u.login_id`,
     [round.class_id],
   );
@@ -566,7 +566,7 @@ export async function publishEvaluationRound(teacherId: string, roundId: string)
     );
     await client.query(
       `UPDATE inquiry_sessions SET stage = 'COMPLETED', last_activity_at = CURRENT_TIMESTAMP
-        WHERE team_id IN (SELECT id FROM teams WHERE class_id = $1)`,
+        WHERE team_id IN (SELECT id FROM teams WHERE class_id = $1 AND status = 'active')`,
       [round.class_id],
     );
     await client.query("COMMIT");
@@ -600,7 +600,7 @@ export async function getEvaluationManagementData(classNumber: number, selectedR
     `SELECT u.id AS student_id, u.name, u.login_id, t.id AS team_id, t.name AS team_name, s.id AS session_id
        FROM users u JOIN team_members tm ON tm.user_id = u.id JOIN teams t ON t.id = tm.team_id
        JOIN inquiry_sessions s ON s.team_id = t.id
-      WHERE t.class_id = $1 AND tm.status = 'active' AND u.status = 'active'
+      WHERE t.class_id = $1 AND t.status = 'active' AND tm.status = 'active' AND u.status = 'active'
       ORDER BY t.team_number, u.login_id`,
     [classId],
   );
