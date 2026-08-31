@@ -335,6 +335,34 @@ CREATE TABLE IF NOT EXISTS teacher_requests (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS notices (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'announcement' CHECK (kind IN ('announcement', 'action_request')),
+  author_id TEXT REFERENCES users(id),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  audience_type TEXT NOT NULL CHECK (audience_type IN ('all', 'class', 'team')),
+  class_id TEXT REFERENCES classes(id),
+  team_id TEXT REFERENCES teams(id),
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'important')),
+  calendar_start DATE,
+  calendar_end DATE,
+  source_type TEXT CHECK (source_type IS NULL OR source_type IN ('plan', 'report')),
+  source_id TEXT,
+  action_path TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notice_reads (
+  notice_id TEXT NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (notice_id, user_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_class ON users(class_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sequence);
@@ -354,6 +382,10 @@ CREATE INDEX IF NOT EXISTS idx_peer_evaluations_evaluator ON peer_evaluations(ev
 CREATE INDEX IF NOT EXISTS idx_evaluation_publications_student ON evaluation_publications(student_id, round_id);
 CREATE INDEX IF NOT EXISTS idx_teams_status ON teams(status, class_id, team_number);
 CREATE INDEX IF NOT EXISTS idx_teacher_requests_created ON teacher_requests(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notices_status_created ON notices(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notices_audience ON notices(audience_type, class_id, team_id);
+CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source_type, source_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_notice_reads_user ON notice_reads(user_id, read_at);
 
 INSERT INTO reports (id, session_id)
 SELECT 'report_' || id, id FROM inquiry_sessions

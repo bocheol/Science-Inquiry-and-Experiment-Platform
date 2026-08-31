@@ -1,6 +1,7 @@
 import { audit, getDb } from "@/lib/db";
 import { REPORT_FIELDS } from "@/lib/constants";
 import { recordReportRevision } from "@/lib/document-history";
+import { createActionNotice, resolveActionNotices } from "@/lib/notices";
 
 const ALLOWED_FIELDS = new Set(["title", ...REPORT_FIELDS.map((field) => field.key)]);
 const REPORT_STAGES = new Set(["EXPERIMENTING", "REPORTING", "EXAMINING", "EVALUATING", "COMPLETED"]);
@@ -180,20 +181,41 @@ export async function submitReport(reportId: string, userId: string) {
       WHERE id = (SELECT session_id FROM reports WHERE id = $1) AND stage = 'EXPERIMENTING'`,
     [reportId],
   );
+  await resolveActionNotices(db, "report", reportId);
   await audit(userId, "report_submitted", "report", reportId);
 }
 
 export async function reviewReport(reportId: string, teacherId: string, decision: "reviewed" | "feedback", feedback: string) {
   if (decision === "feedback" && !feedback.trim()) throw new Error("수정할 내용을 입력해 주세요.");
   const db = await getDb();
-  const result = await db.query<{ status: string }>("SELECT status FROM reports WHERE id = $1", [reportId]);
-  const current = result.rows[0];
-  if (!current) throw new Error("보고서를 찾을 수 없습니다.");
-  if (current.status !== "submitted" && current.status !== "reviewed") throw new Error("학생이 제출한 보고서만 검토할 수 있습니다.");
-  await recordReportRevision(db, reportId, teacherId, decision === "reviewed" ? "teacher_review" : "teacher_feedback");
-  await db.query(
-    `UPDATE reports SET status = $1, teacher_feedback = $2, reviewed_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4`,
-    [decision, decision === "feedback" ? feedback.trim() : null, teacherId, reportId],
-  );
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<{ status: string; team_id: string }>(
+      `SELECT r.status, s.team_id FROM reports r JOIN inquiry_sessions s ON s.id = r.session_id WHERE r.id = $1`,
+      [reportId],
+    );
+    const current = result.rows[0];
+    if (!current) throw new Error("보고서를 찾을 수 없습니다.");
+    if (current.status !== "submitted" && current.status !== "reviewed") throw new Error("학생이 제출한 보고서만 검토할 수 있습니다.");
+    await recordReportRevision(client, reportId, teacherId, decision === "reviewed" ? "teacher_review" : "teacher_feedback");
+    const updated = await client.query(
+      `UPDATE reports SET status = $1, teacher_feedback = $2, reviewed_by = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4 AND status = $5`,
+      [decision, decision === "feedback" ? feedback.trim() : null, teacherId, reportId, current.status],
+    );
+    if (updated.rowCount !== 1) throw new Error("보고서 상태가 방금 변경되었습니다. 화면을 새로고침한 뒤 다시 확인해 주세요.");
+    if (decision === "feedback") {
+      await createActionNotice(client, { teacherId, teamId: current.team_id, sourceType: "report", sourceId: reportId, content: feedback });
+    } else {
+      await resolveActionNotices(client, "report", reportId);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   await audit(teacherId, decision === "reviewed" ? "report_reviewed" : "report_feedback", "report", reportId);
 }

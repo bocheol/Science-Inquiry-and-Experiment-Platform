@@ -32,7 +32,7 @@
 - 공개 주소: `https://science-inquiry-platform-974188506094.asia-northeast3.run.app`
 - Google Cloud 프로젝트: `chemistry-tutor-493405`
 - 리전: `asia-northeast3` (서울)
-- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00014-jk2` (`Ready=True`, 트래픽 100%)
+- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00015-vdl` (`Ready=True`, 트래픽 100%)
 - Cloud SQL 인스턴스: `science-platform-db`
 - 데이터베이스: `science_platform`
 - PostgreSQL 16, 삭제 보호 활성화
@@ -201,6 +201,15 @@
 - 작성 교사·시각·분류·제목·내용·처리 상태 저장, 외부 AI·외부 서비스 전송 없음
 - 학생 이름·학번·비밀번호·학생 자료 입력 금지 안내와 서버 차단, 학생·비로그인 접근 차단
 
+### 공지·알림함과 일정
+
+- 교사가 전체·특정 반·특정 팀을 대상으로 일반·중요 공지를 작성하고 수정·보관·복원
+- 중요 공지는 학생 로그인 뒤 팝업으로 안내하고, 헤더와 공지함에 학생별 읽지 않은 공지 수 표시
+- 선택한 시작일·종료일을 학생 공지함 월간 달력에 자동 표시
+- 계획서·보고서 수정 요청 시 교사 피드백 문구를 알림으로 보존하고 해당 작성 탭으로 바로 이동
+- 공지를 읽은 상태와 수정 요청을 처리한 상태를 분리하며, 해당 문서를 다시 제출하면 처리 필요 상태 자동 해제
+- 학생 식별정보·비밀번호로 보이는 교사 공지 입력을 서버에서 차단하고 학생·교사 역할별 API 접근 분리
+
 ### 운영·배포
 
 - Cloud Run 공개 배포
@@ -270,6 +279,7 @@
 교사 명단 등록
 → 교사 팀 생성·학생 배정·팀장 지정
 → 학생 최초 로그인·비밀번호 변경
+→ 교사 공지 배포·학생 공지함 및 일정 확인
 → 팀 관심사 입력
 → AI 탐구 방향 3개 제안
 → 팀 주제 선택·AI 이론 탐구 대화
@@ -376,6 +386,10 @@
 - 학생 계정 관리 서비스 테스트 2개를 포함한 Vitest 16개 파일 41개 테스트, TypeScript 타입 검사, Next.js 16.3.2 프로덕션 빌드를 통과했다.
 - 로컬 브라우저에서 학생 개별 추가, 임시 비밀번호 1회 표시, 학번 재입력 비활성화 확인, 비활성 목록, 미배정 복원, 390px 화면의 가로 넘침 없음을 확인했다.
 - Cloud Run 리비전 `science-inquiry-platform-00014-jk2` 배포 및 트래픽 100%를 확인했다. `/api/health`와 로그인 화면은 HTTP 200, 비로그인 학생 관리 API는 403이었으며 새 리비전의 심각도 `ERROR` 이상 로그는 없었다.
+- 2026-08-31 전체·반·팀 공지, 중요 팝업, 학생별 읽음 수, 날짜 공지 달력, 계획서·보고서 수정 요청 알림과 재제출 시 자동 처리 완료를 구현했다.
+- 공지 대상 격리·읽음·수정 후 읽음 초기화·보관과 계획서·보고서 처리 알림 테스트를 포함해 Vitest 17개 파일 43개 테스트, TypeScript 타입 검사, Next.js 16.3.2 프로덕션 빌드를 통과했다.
+- 로컬 브라우저에서 교사 팀 공지 작성, 학생 중요 팝업·읽음 숫자, 수정 요청 딥 링크, 읽음과 처리 필요 분리, 기간 공지의 달력 양일 표시를 확인했다. 390×844 학생·교사 화면에서 가로 넘침이 없었고, 화면 검증 중 발견한 서버·브라우저 날짜 표기 불일치와 날짜 입력 반영 문제를 수정했다.
+- Cloud Run 리비전 `science-inquiry-platform-00015-vdl` 배포 및 트래픽 100%를 확인했다. `/api/health`와 로그인 화면은 HTTP 200, 비로그인 학생 공지·교사 공지 API는 403이었으며 새 리비전의 심각도 `ERROR` 이상 로그는 없었다.
 
 ## 개인정보·보안 주의사항
 
@@ -398,6 +412,7 @@
 - Excel/CSV 생성: `src/lib/teacher-export.ts`
 - 교사 진척 화면: `src/components/teacher-dashboard.tsx`
 - 학생 계정 관리: `src/lib/student-management.ts`, `src/app/api/teacher/students/route.ts`
+- 공지·알림 서비스와 화면: `src/lib/notices.ts`, `src/components/notice-center.tsx`, `src/components/teacher-notice-manager.tsx`
 - 내보내기 API: `src/app/api/teacher/progress-export/route.ts`
 - 시험 출제·공정성 서비스: `src/lib/exam-service.ts`, `src/lib/exam-ai.ts`
 - 시험 PDF: `src/lib/exam-pdf.ts`, `src/app/api/teacher/exams/pdf/route.ts`

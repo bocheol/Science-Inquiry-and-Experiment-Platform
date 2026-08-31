@@ -42,6 +42,15 @@ export function InquiryWorkspace({ initialData, currentUserId }: { initialData: 
     const timer = window.setInterval(() => void refresh(), 4_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+  useEffect(() => {
+    const openHash = () => {
+      const requested = window.location.hash.slice(1);
+      if (requested === "plan" || requested === "report") setTab(requested);
+    };
+    openHash();
+    window.addEventListener("hashchange", openHash);
+    return () => window.removeEventListener("hashchange", openHash);
+  }, []);
 
   return (
     <div className="stack">
@@ -50,6 +59,7 @@ export function InquiryWorkspace({ initialData, currentUserId }: { initialData: 
         <div className="member-list">{data.members.map((member) => <span className="member-pill" key={member.id}>{member.isLeader ? "⭐ " : ""}{member.name}</span>)}</div>
       </section>
       <nav className="tabs" aria-label="탐구 메뉴">
+        <a className="tab notice-tab-link" href="/notices">📢 공지·일정</a>
         <button className={`tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>💬 이론 탐구</button>
         <button className={`tab ${tab === "plan" ? "active" : ""}`} onClick={() => setTab("plan")}>📝 탐구 계획</button>
         <button className={`tab ${tab === "materials" ? "active" : ""}`} onClick={() => setTab("materials")}>🧪 준비물 신청</button>

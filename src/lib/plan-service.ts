@@ -1,5 +1,6 @@
 import { audit, getDb } from "@/lib/db";
 import { recordPlanRevision } from "@/lib/document-history";
+import { createActionNotice, resolveActionNotices } from "@/lib/notices";
 
 const ALLOWED_FIELDS = new Set([
   "field", "topic", "motivation", "purpose", "theory", "priorResearch", "method",
@@ -83,6 +84,7 @@ export async function submitPlan(planId: string, userId: string) {
         AND stage IN ('STARTING', 'EXPLORING', 'PLANNING')`,
     [planId],
   );
+  await resolveActionNotices(db, "plan", planId);
   await audit(userId, "plan_submitted", "investigation_plan", planId);
 }
 
@@ -95,45 +97,59 @@ export async function reviewPlan(
 ) {
   const db = await getDb();
   if (decision === "feedback" && !feedback.trim()) throw new Error("수정할 내용을 입력해 주세요.");
-  const current = await db.query<{ review_status: string; class_number: number; team_name: string }>(
-    `SELECT p.review_status, c.class_number, t.name AS team_name
-       FROM investigation_plans p
-       JOIN inquiry_sessions s ON s.id = p.session_id
-       JOIN teams t ON t.id = s.team_id
-       JOIN classes c ON c.id = t.class_id
-      WHERE p.id = $1`,
-    [planId],
-  );
-  const plan = current.rows[0];
-  if (!plan) throw new Error("계획서를 찾을 수 없습니다.");
-
-  if (plan.review_status === "approved") {
-    if (decision === "approved") throw new Error("이미 승인된 계획서입니다.");
-    const expectedConfirmation = `${plan.class_number}반 ${plan.team_name}`;
-    if (confirmation.trim() !== expectedConfirmation) {
-      throw new Error(`승인 상태를 변경하려면 '${expectedConfirmation}'을(를) 정확히 입력해 주세요.`);
-    }
-  }
-
-  await recordPlanRevision(db, planId, teacherId, decision === "approved" ? "teacher_approve" : "teacher_feedback");
-
-  const updated = await db.query(
-    `UPDATE investigation_plans
-        SET review_status = $1, teacher_feedback = $2, reviewed_by = $3, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $4 AND review_status = $5`,
-    [decision, feedback.trim() || null, teacherId, planId, plan.review_status],
-  );
-  if (updated.rowCount !== 1) throw new Error("계획서 상태가 방금 변경되었습니다. 화면을 새로고침한 뒤 다시 확인해 주세요.");
-  if (decision === "approved") {
-    await db.query(
-      `UPDATE inquiry_sessions SET stage = 'EXPERIMENTING', last_activity_at = CURRENT_TIMESTAMP
-        WHERE id = (SELECT session_id FROM investigation_plans WHERE id = $1)
-          AND stage IN ('STARTING', 'EXPLORING', 'PLANNING')`,
+  const client = await db.connect();
+  let previousStatus = "";
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{ review_status: string; class_number: number; team_name: string; team_id: string }>(
+      `SELECT p.review_status, c.class_number, t.name AS team_name, t.id AS team_id
+         FROM investigation_plans p
+         JOIN inquiry_sessions s ON s.id = p.session_id
+         JOIN teams t ON t.id = s.team_id
+         JOIN classes c ON c.id = t.class_id
+        WHERE p.id = $1`,
       [planId],
     );
+    const plan = current.rows[0];
+    if (!plan) throw new Error("계획서를 찾을 수 없습니다.");
+    previousStatus = plan.review_status;
+
+    if (plan.review_status === "approved") {
+      if (decision === "approved") throw new Error("이미 승인된 계획서입니다.");
+      const expectedConfirmation = `${plan.class_number}반 ${plan.team_name}`;
+      if (confirmation.trim() !== expectedConfirmation) {
+        throw new Error(`승인 상태를 변경하려면 '${expectedConfirmation}'을(를) 정확히 입력해 주세요.`);
+      }
+    }
+
+    await recordPlanRevision(client, planId, teacherId, decision === "approved" ? "teacher_approve" : "teacher_feedback");
+    const updated = await client.query(
+      `UPDATE investigation_plans
+          SET review_status = $1, teacher_feedback = $2, reviewed_by = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4 AND review_status = $5`,
+      [decision, feedback.trim() || null, teacherId, planId, plan.review_status],
+    );
+    if (updated.rowCount !== 1) throw new Error("계획서 상태가 방금 변경되었습니다. 화면을 새로고침한 뒤 다시 확인해 주세요.");
+    if (decision === "feedback") {
+      await createActionNotice(client, { teacherId, teamId: plan.team_id, sourceType: "plan", sourceId: planId, content: feedback });
+    } else {
+      await resolveActionNotices(client, "plan", planId);
+      await client.query(
+        `UPDATE inquiry_sessions SET stage = 'EXPERIMENTING', last_activity_at = CURRENT_TIMESTAMP
+          WHERE id = (SELECT session_id FROM investigation_plans WHERE id = $1)
+            AND stage IN ('STARTING', 'EXPLORING', 'PLANNING')`,
+        [planId],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
   await audit(teacherId, decision === "approved" ? "plan_approved" : "plan_feedback", "investigation_plan", planId, {
-    previousStatus: plan.review_status,
-    protectedStatusChange: plan.review_status === "approved",
+    previousStatus,
+    protectedStatusChange: previousStatus === "approved",
   });
 }
