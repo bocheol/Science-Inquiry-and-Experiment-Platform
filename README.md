@@ -46,6 +46,8 @@ GOOGLE_SPREADSHEET_ID=1Ia5xoZZDv3b4sVq3la8POFNE_QVHEuLhitS-YC_QBVg
 
 `OPENAI_API_KEY`는 브라우저 코드에 포함되지 않고 서버에서만 사용합니다. 팀 ID는 해시된 안전 식별자로 보내며, AI 프롬프트에는 실명과 학번 대신 `팀원 A` 같은 가명만 전달합니다. API 키가 있어도 별도의 API 결제/사용 한도가 준비되어야 합니다. ChatGPT 구독과 API 결제는 별개입니다.
 
+기능별 기본 모델은 일반 팀 대화 `gpt-5.6-luna`, 출처 검색이 필요한 팀 대화와 탐구 방향 제안 `gpt-5.6-terra`, 시험 문항 생성 `gpt-5.6-sol`입니다. 팀 대화의 웹 검색은 학생이 출처·논문·최신 자료 등을 명시적으로 요청한 경우에만 활성화됩니다. 모든 호출은 `low` reasoning effort를 사용하며, 운영 로그에는 학생 내용이나 팀 식별자 없이 기능·모델·토큰·웹 검색 호출 수만 기록합니다. 필요하면 `.env.local` 또는 Cloud Run 환경변수의 `OPENAI_TEAM_CHAT_MODEL`, `OPENAI_TEAM_RESEARCH_MODEL`, `OPENAI_TOPIC_MODEL`, `OPENAI_EXAM_MODEL`로 각각 덮어쓸 수 있습니다.
+
 ## 운영 전 필수값
 
 - `DATABASE_URL` 또는 `INSTANCE_UNIX_SOCKET`과 `DB_USER`, `DB_PASSWORD`, `DB_NAME`: 영구 PostgreSQL 연결

@@ -4,8 +4,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { audit, getDb } from "@/lib/db";
 import { createId } from "@/lib/id";
-
-const MODEL = process.env.OPENAI_MODEL ?? "gpt-5.6-sol";
+import { getAiRuntime, observeOpenAiRequest, shouldUseWebResearch } from "@/lib/ai-config";
 
 const BASE_INSTRUCTIONS = `당신은 고등학교 1학년 통합과학 팀 탐구를 돕는 친절하고 정확한 연구 조력자입니다.
 
@@ -79,16 +78,18 @@ export async function generateTopicSuggestions(sessionId: string, teamId: string
   const locked = await lockAi(sessionId);
   if (!locked) throw new Error("AI가 이전 질문에 답변 중입니다. 잠시만 기다려 주세요.");
   try {
-    const response = await getOpenAIClient().responses.parse({
-      model: MODEL,
-      reasoning: { effort: "low" },
-      store: false,
-      safety_identifier: safetyIdentifier(teamId),
-      instructions: `${BASE_INSTRUCTIONS}\n\n지금은 DIVERGE 단계입니다. 관심사를 통합과학과 연결한 서로 다른 탐구 방향을 정확히 3개 제안하세요. 단순 실험이면 측정 가능한 변인과 대조 조건을 추가하세요. 학생이 학교에서 수행 가능한지와 안전도 함께 판단하세요.`,
-      input: `팀의 관심사: ${interest}`,
-      tools: [{ type: "web_search", search_context_size: "low" }],
-      text: { format: zodTextFormat(suggestionSchema, "inquiry_directions") },
-    });
+    const runtime = getAiRuntime("topic_suggestions");
+    const response = await observeOpenAiRequest("topic_suggestions", runtime.model, () =>
+      getOpenAIClient().responses.parse({
+        model: runtime.model,
+        reasoning: { effort: runtime.reasoningEffort },
+        store: false,
+        safety_identifier: safetyIdentifier(teamId),
+        instructions: `${BASE_INSTRUCTIONS}\n\n지금은 DIVERGE 단계입니다. 관심사를 통합과학과 연결한 서로 다른 탐구 방향을 정확히 3개 제안하세요. 단순 실험이면 측정 가능한 변인과 대조 조건을 추가하세요. 학생이 학교에서 수행 가능한지와 안전도 함께 판단하세요.`,
+        input: `팀의 관심사: ${interest}`,
+        text: { format: zodTextFormat(suggestionSchema, "inquiry_directions") },
+      }),
+    );
     if (!response.output_parsed) throw new Error("AI의 탐구 방향 형식을 확인하지 못했습니다.");
     const db = await getDb();
     await db.query(
@@ -156,21 +157,26 @@ export async function sendTeamMessage(
     const history = historyResult.rows.reverse().map((message) =>
       message.role === "assistant" ? `AI: ${message.content}` : `${message.sender_alias ?? "팀원"}: ${message.content}`,
     ).join("\n");
-    const response = await getOpenAIClient().responses.create({
-      model: MODEL,
-      reasoning: { effort: "low" },
-      store: false,
-      safety_identifier: safetyIdentifier(teamId),
-      instructions: BASE_INSTRUCTIONS,
-      input: [
-        session?.conversation_summary ? `이전 대화 요약: ${session.conversation_summary}` : "",
-        session?.selected_topic ? `현재 선택한 탐구 주제: ${session.selected_topic}` : "현재 주제는 아직 확정되지 않았습니다.",
-        "최근 팀 대화:",
-        history,
-      ].filter(Boolean).join("\n\n"),
-      tools: [{ type: "web_search", search_context_size: "low" }],
-      max_output_tokens: 900,
-    });
+    const useWebResearch = shouldUseWebResearch(content);
+    const feature = useWebResearch ? "team_research" : "team_chat";
+    const runtime = getAiRuntime(feature);
+    const response = await observeOpenAiRequest(feature, runtime.model, () =>
+      getOpenAIClient().responses.create({
+        model: runtime.model,
+        reasoning: { effort: runtime.reasoningEffort },
+        store: false,
+        safety_identifier: safetyIdentifier(teamId),
+        instructions: BASE_INSTRUCTIONS,
+        input: [
+          session?.conversation_summary ? `이전 대화 요약: ${session.conversation_summary}` : "",
+          session?.selected_topic ? `현재 선택한 탐구 주제: ${session.selected_topic}` : "현재 주제는 아직 확정되지 않았습니다.",
+          "최근 팀 대화:",
+          history,
+        ].filter(Boolean).join("\n\n"),
+        ...(useWebResearch ? { tools: [{ type: "web_search" as const, search_context_size: "low" as const }] } : {}),
+        max_output_tokens: 900,
+      }),
+    );
     const answer = response.output_text.trim();
     if (!answer) throw new Error("AI 답변이 비어 있습니다.");
     const citations = collectCitations(response);

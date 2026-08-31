@@ -1,6 +1,7 @@
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { getOpenAIClient, safetyIdentifier } from "@/lib/ai";
+import { getAiRuntime, observeOpenAiRequest } from "@/lib/ai-config";
 
 export type ExamSourceItem = { key: string; label: string; text: string };
 export type StudentExamSource = { studentRef: string; sources: ExamSourceItem[] };
@@ -55,8 +56,6 @@ const teamSchema = z.object({
   })),
 });
 
-const MODEL = process.env.OPENAI_EXAM_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-5.6-sol";
-
 const EXAM_INSTRUCTIONS = `당신은 고등학교 1학년 통합과학 수행평가 문항을 설계하는 평가 전문가입니다.
 
 절대 규칙:
@@ -76,30 +75,36 @@ function ensureCount<T>(items: T[], count: number, label: string) {
 export const openAiExamGenerator: ExamGenerator = {
   async generateCommon(input) {
     if (!input.count) return [];
-    const response = await getOpenAIClient().responses.parse({
-      model: MODEL,
-      reasoning: { effort: "low" },
-      store: false,
-      safety_identifier: safetyIdentifier(`exam-common:${input.scope}`),
-      instructions: `${EXAM_INSTRUCTIONS}\n\n전체 공통 문항을 만드세요. 특정 팀의 실제 수치나 표현을 복사하지 말고, 여러 팀 자료에서 공통으로 필요한 탐구 역량을 파악해 새로운 중립 실험 자료·표·상황을 stimulus에 만드세요. 모든 학생이 같은 문항을 받습니다. sourceKeys는 빈 배열로 반환하세요.`,
-      input: JSON.stringify({ requestedCount: input.count, assessmentScope: input.scope, anonymizedTeamSummaries: input.teamSummaries }),
-      text: { format: zodTextFormat(commonSchema, "common_exam_questions") },
-    });
+    const runtime = getAiRuntime("exam_common");
+    const response = await observeOpenAiRequest("exam_common", runtime.model, () =>
+      getOpenAIClient().responses.parse({
+        model: runtime.model,
+        reasoning: { effort: runtime.reasoningEffort },
+        store: false,
+        safety_identifier: safetyIdentifier(`exam-common:${input.scope}`),
+        instructions: `${EXAM_INSTRUCTIONS}\n\n전체 공통 문항을 만드세요. 특정 팀의 실제 수치나 표현을 복사하지 말고, 여러 팀 자료에서 공통으로 필요한 탐구 역량을 파악해 새로운 중립 실험 자료·표·상황을 stimulus에 만드세요. 모든 학생이 같은 문항을 받습니다. sourceKeys는 빈 배열로 반환하세요.`,
+        input: JSON.stringify({ requestedCount: input.count, assessmentScope: input.scope, anonymizedTeamSummaries: input.teamSummaries }),
+        text: { format: zodTextFormat(commonSchema, "common_exam_questions") },
+      }),
+    );
     if (!response.output_parsed) throw new Error("공통 문항 형식을 확인하지 못했습니다.");
     return ensureCount(response.output_parsed.questions, input.count, "공통");
   },
 
   async generateTeam(input) {
     if (!input.teamCount && !input.individualCount) return { teamQuestions: [], individualQuestions: [] };
-    const response = await getOpenAIClient().responses.parse({
-      model: MODEL,
-      reasoning: { effort: "low" },
-      store: false,
-      safety_identifier: safetyIdentifier(`exam-team:${input.team.teamId}`),
-      instructions: `${EXAM_INSTRUCTIONS}\n\n팀 공통 문항은 팀의 계획서·보고서 source key만 사용하고 개인 일지는 사용하지 마세요. 개인화 문항은 해당 studentRef의 자료만 사용하며 다른 학생 자료를 섞지 마세요. 각 stimulus에는 답에 필요한 짧은 자료를 제시하고, 같은 범주의 문항은 사고 단계와 답변 분량이 비슷해야 합니다. 개인 자료가 부족하면 해당 학생에게 관찰과 해석 구분·추가 측정을 묻는 표준 대체 문항을 만드세요.`,
-      input: JSON.stringify({ requestedTeamCount: input.teamCount, requestedIndividualCountPerStudent: input.individualCount, team: input.team }),
-      text: { format: zodTextFormat(teamSchema, "team_and_individual_exam_questions") },
-    });
+    const runtime = getAiRuntime("exam_team");
+    const response = await observeOpenAiRequest("exam_team", runtime.model, () =>
+      getOpenAIClient().responses.parse({
+        model: runtime.model,
+        reasoning: { effort: runtime.reasoningEffort },
+        store: false,
+        safety_identifier: safetyIdentifier(`exam-team:${input.team.teamId}`),
+        instructions: `${EXAM_INSTRUCTIONS}\n\n팀 공통 문항은 팀의 계획서·보고서 source key만 사용하고 개인 일지는 사용하지 마세요. 개인화 문항은 해당 studentRef의 자료만 사용하며 다른 학생 자료를 섞지 마세요. 각 stimulus에는 답에 필요한 짧은 자료를 제시하고, 같은 범주의 문항은 사고 단계와 답변 분량이 비슷해야 합니다. 개인 자료가 부족하면 해당 학생에게 관찰과 해석 구분·추가 측정을 묻는 표준 대체 문항을 만드세요.`,
+        input: JSON.stringify({ requestedTeamCount: input.teamCount, requestedIndividualCountPerStudent: input.individualCount, team: input.team }),
+        text: { format: zodTextFormat(teamSchema, "team_and_individual_exam_questions") },
+      }),
+    );
     if (!response.output_parsed) throw new Error("팀·개인 문항 형식을 확인하지 못했습니다.");
     ensureCount(response.output_parsed.teamQuestions, input.teamCount, "팀 공통");
     const expectedRefs = new Set(input.team.students.map((student) => student.studentRef));
