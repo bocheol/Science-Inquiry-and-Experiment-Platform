@@ -171,7 +171,9 @@ export async function listStudentNotices(actor: SessionUser): Promise<NoticeFeed
             c.class_number, n.team_id, t.name AS team_name, n.priority,
             n.calendar_start, n.calendar_end, n.action_path,
             (nr.user_id IS NOT NULL) AS is_read, (n.resolved_at IS NOT NULL) AS is_resolved,
-            n.status, n.created_at, n.updated_at
+            n.status, n.created_at, n.updated_at,
+            CASE WHEN n.kind = 'action_request' AND n.resolved_at IS NULL THEN 0 ELSE 1 END AS action_rank,
+            CASE WHEN nr.user_id IS NULL THEN 0 ELSE 1 END AS unread_rank
        FROM notices n
        LEFT JOIN users author ON author.id = n.author_id
        LEFT JOIN classes c ON c.id = n.class_id
@@ -184,9 +186,7 @@ export async function listStudentNotices(actor: SessionUser): Promise<NoticeFeed
           OR (n.audience_type = 'class' AND n.class_id = $2)
           OR (n.audience_type = 'team' AND recipient.user_id IS NOT NULL AND t.status = 'active')
         )
-      ORDER BY CASE WHEN n.kind = 'action_request' AND n.resolved_at IS NULL THEN 0 ELSE 1 END,
-               CASE WHEN nr.user_id IS NULL THEN 0 ELSE 1 END,
-               n.created_at DESC, n.id DESC`,
+      ORDER BY action_rank, unread_rank, n.created_at DESC, n.id DESC`,
     [actor.id, actor.classId],
   );
   const notices = result.rows.map(toNotice);

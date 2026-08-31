@@ -32,7 +32,7 @@
 - 공개 주소: `https://science-inquiry-platform-974188506094.asia-northeast3.run.app`
 - Google Cloud 프로젝트: `chemistry-tutor-493405`
 - 리전: `asia-northeast3` (서울)
-- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00015-vdl` (`Ready=True`, 트래픽 100%)
+- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00016-5wk` (`Ready=True`, 트래픽 100%)
 - Cloud SQL 인스턴스: `science-platform-db`
 - 데이터베이스: `science_platform`
 - PostgreSQL 16, 삭제 보호 활성화
@@ -390,6 +390,8 @@
 - 공지 대상 격리·읽음·수정 후 읽음 초기화·보관과 계획서·보고서 처리 알림 테스트를 포함해 Vitest 17개 파일 43개 테스트, TypeScript 타입 검사, Next.js 16.3.2 프로덕션 빌드를 통과했다.
 - 로컬 브라우저에서 교사 팀 공지 작성, 학생 중요 팝업·읽음 숫자, 수정 요청 딥 링크, 읽음과 처리 필요 분리, 기간 공지의 달력 양일 표시를 확인했다. 390×844 학생·교사 화면에서 가로 넘침이 없었고, 화면 검증 중 발견한 서버·브라우저 날짜 표기 불일치와 날짜 입력 반영 문제를 수정했다.
 - Cloud Run 리비전 `science-inquiry-platform-00015-vdl` 배포 및 트래픽 100%를 확인했다. `/api/health`와 로그인 화면은 HTTP 200, 비로그인 학생 공지·교사 공지 API는 403이었으며 새 리비전의 심각도 `ERROR` 이상 로그는 없었다.
+- 운영 PostgreSQL에서 학생 공지 조회의 `SELECT DISTINCT` 정렬식이 선택 목록에 없다는 오류(`42P10`, 화면 오류 `825440413`)를 확인했다. 정렬 순위를 선택 목록의 별칭으로 명시해 공지·읽음 데이터 변경 없이 수정했다.
+- 공지 기능 테스트 2개, TypeScript 타입 검사, Next.js 16.3.2 프로덕션 빌드를 다시 통과한 뒤 Cloud Run 리비전 `science-inquiry-platform-00016-5wk`로 핫픽스를 배포하고 트래픽 100%를 확인했다. `/api/health`와 로그인 화면은 HTTP 200이었고 새 리비전의 심각도 `ERROR` 이상 로그는 없었다.
 
 ## 개인정보·보안 주의사항
 
