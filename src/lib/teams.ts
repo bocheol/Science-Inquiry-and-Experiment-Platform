@@ -43,10 +43,10 @@ export async function assignStudent(actorId: string, studentId: string, teamId: 
   const db = await getDb();
   const valid = await db.query(
     `SELECT u.id FROM users u JOIN teams t ON t.class_id = u.class_id
-      WHERE u.id = $1 AND t.id = $2 AND u.role = 'student' AND t.status = 'active'`,
+      WHERE u.id = $1 AND t.id = $2 AND u.role = 'student' AND u.status = 'active' AND t.status = 'active'`,
     [studentId, teamId],
   );
-  if (!valid.rows[0]) throw new Error("학생과 팀의 학급이 다릅니다.");
+  if (!valid.rows[0]) throw new Error("활성 학생과 활성 팀의 학급이 같은지 확인해 주세요.");
   await db.query(
     `UPDATE team_members SET status = 'inactive', left_at = CURRENT_TIMESTAMP
       WHERE user_id = $1 AND status = 'active' AND team_id <> $2`,

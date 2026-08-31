@@ -15,6 +15,12 @@ export type TeacherDashboardData = {
     journalCount: number;
     lastJournalDate: string | null;
   }>;
+  inactiveStudents: Array<{
+    id: string;
+    name: string;
+    loginId: string;
+    classNumber: number;
+  }>;
   teams: Array<{
     id: string;
     name: string;
@@ -91,7 +97,7 @@ function attentionFor(team: {
 
 export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
   const db = await getDb();
-  const [studentResult, teamResult, archivedTeamResult, memberCounts, messageCounts, journalCounts, materialRows] = await Promise.all([
+  const [studentResult, inactiveStudentResult, teamResult, archivedTeamResult, memberCounts, messageCounts, journalCounts, materialRows] = await Promise.all([
     db.query<{
       id: string; name: string; login_id: string; class_number: number; team_id: string | null;
       team_number: number | null; leader_user_id: string | null; must_change_password: boolean;
@@ -103,6 +109,12 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
          LEFT JOIN team_members tm ON tm.user_id = u.id AND tm.status = 'active'
          LEFT JOIN teams t ON t.id = tm.team_id AND t.status = 'active'
         WHERE u.role = 'student' AND u.status = 'active'
+        ORDER BY c.class_number, u.login_id`,
+    ),
+    db.query<{ id: string; name: string; login_id: string; class_number: number }>(
+      `SELECT u.id, u.name, u.login_id, c.class_number
+         FROM users u JOIN classes c ON c.id = u.class_id
+        WHERE u.role = 'student' AND u.status = 'inactive'
         ORDER BY c.class_number, u.login_id`,
     ),
     db.query<{
@@ -181,6 +193,12 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
       lastJournalDate: journal?.lastJournalAt ?? null,
     };
   });
+  const inactiveStudents = inactiveStudentResult.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    loginId: row.login_id,
+    classNumber: row.class_number,
+  }));
 
   const teams = teamResult.rows.map((row) => {
     const members = students.filter((student) => student.teamId === row.id);
@@ -228,6 +246,7 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
 
   return {
     students,
+    inactiveStudents,
     teams,
     archivedTeams,
     counts: {

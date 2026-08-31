@@ -1,6 +1,6 @@
 # 과탐실 AI 탐구 플랫폼 - 현재 상태 및 인수인계
 
-마지막 갱신: 2026-08-30
+마지막 갱신: 2026-08-31
 
 이 파일은 실제 구현·배포 상태와 다음 작업을 기록하는 운영 인수인계 문서다. 최신 확정 결정은 `CURRENT_DECISIONS.md`, 과거 배경 설계는 `implementation_plan.md`에 둔다. 비밀번호, API 키, 서비스 계정 JSON 및 학생 실명·학번은 기록하지 않는다.
 
@@ -32,7 +32,7 @@
 - 공개 주소: `https://science-inquiry-platform-974188506094.asia-northeast3.run.app`
 - Google Cloud 프로젝트: `chemistry-tutor-493405`
 - 리전: `asia-northeast3` (서울)
-- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00012-hks` (`Ready=True`, 트래픽 100%)
+- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00014-jk2` (`Ready=True`, 트래픽 100%)
 - Cloud SQL 인스턴스: `science-platform-db`
 - 데이터베이스: `science_platform`
 - PostgreSQL 16, 삭제 보호 활성화
@@ -71,6 +71,9 @@
 - 교사 로그인 및 전체 학급 공동 관리
 - 최초 로그인 비밀번호 변경
 - 교사의 학생 비밀번호 초기화
+- 교사 대시보드의 학생 개별 추가·비활성화·복원
+- 학생 비활성화 시 로그인·현재 팀 관계·팀장 권한만 종료하고 과거 기록 보존
+- 학생 복원 시 기존 팀에 자동 재배정하지 않고 미배정 상태로 복원
 - 학생 명단 Excel 일괄 등록
 - 학생 임시 로그인 카드 출력용 데이터와 별도 PDF 생성
 - 학생·교사 임시 비밀번호의 두벌식 쿼티 영타 생성
@@ -369,6 +372,10 @@
 - 새 리비전의 `/api/health`, 로그인 화면, manifest, 192·512 아이콘은 HTTP 200이었다. 로그인과 API에는 `private, no-store`가 적용되었고, 비로그인 교사 팀 변경·건의 게시판·학생 일지 API는 403이었다.
 - 운영 로그인 화면을 스마트폰 폭에서 확인해 설치 안내와 manifest 연결, 가로 넘침 없음(본문 너비와 화면 너비 일치)을 확인했다. 새 리비전의 최근 심각도 `ERROR` 이상 Cloud Run 로그는 없었다.
 - 민감 파일명·비밀값 서명 제외 검사를 통과한 54개 기능·문서·PWA 변경 파일을 기존 GitHub `main`에 반영했다.
+- 2026-08-31 교사 대시보드의 학생 개별 추가·비활성화·복원을 구현했다. 비활성 학생은 로그인과 새 팀 배정이 차단되고 현재 팀 관계·팀장 권한만 종료되며 메시지 등 과거 기록은 보존된다.
+- 학생 계정 관리 서비스 테스트 2개를 포함한 Vitest 16개 파일 41개 테스트, TypeScript 타입 검사, Next.js 16.3.2 프로덕션 빌드를 통과했다.
+- 로컬 브라우저에서 학생 개별 추가, 임시 비밀번호 1회 표시, 학번 재입력 비활성화 확인, 비활성 목록, 미배정 복원, 390px 화면의 가로 넘침 없음을 확인했다.
+- Cloud Run 리비전 `science-inquiry-platform-00014-jk2` 배포 및 트래픽 100%를 확인했다. `/api/health`와 로그인 화면은 HTTP 200, 비로그인 학생 관리 API는 403이었으며 새 리비전의 심각도 `ERROR` 이상 로그는 없었다.
 
 ## 개인정보·보안 주의사항
 
@@ -390,6 +397,7 @@
 - 교사 진척 집계: `src/lib/teacher-data.ts`
 - Excel/CSV 생성: `src/lib/teacher-export.ts`
 - 교사 진척 화면: `src/components/teacher-dashboard.tsx`
+- 학생 계정 관리: `src/lib/student-management.ts`, `src/app/api/teacher/students/route.ts`
 - 내보내기 API: `src/app/api/teacher/progress-export/route.ts`
 - 시험 출제·공정성 서비스: `src/lib/exam-service.ts`, `src/lib/exam-ai.ts`
 - 시험 PDF: `src/lib/exam-pdf.ts`, `src/app/api/teacher/exams/pdf/route.ts`

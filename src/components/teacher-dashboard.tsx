@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import type { IssuedCredential } from "@/lib/roster";
 import type { TeacherDashboardData } from "@/lib/teacher-data";
 import { useToast } from "@/components/toast-provider";
@@ -42,6 +42,11 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
   const [showArchived, setShowArchived] = useState(false);
   const [archivingTeamId, setArchivingTeamId] = useState<string | null>(null);
   const [archiveConfirmation, setArchiveConfirmation] = useState("");
+  const [newStudentLoginId, setNewStudentLoginId] = useState("");
+  const [newStudentName, setNewStudentName] = useState("");
+  const [showInactiveStudents, setShowInactiveStudents] = useState(false);
+  const [deactivatingStudentId, setDeactivatingStudentId] = useState<string | null>(null);
+  const [deactivateConfirmation, setDeactivateConfirmation] = useState("");
 
   const visibleStudents = useMemo(
     () => data.students.filter((student) => student.classNumber === classNumber),
@@ -50,6 +55,10 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
   const visibleTeams = useMemo(
     () => data.teams.filter((team) => team.classNumber === classNumber),
     [data.teams, classNumber],
+  );
+  const visibleInactiveStudents = useMemo(
+    () => data.inactiveStudents.filter((student) => student.classNumber === classNumber),
+    [data.inactiveStudents, classNumber],
   );
   const visibleArchivedTeams = useMemo(
     () => data.archivedTeams.filter((team) => team.classNumber === classNumber),
@@ -96,6 +105,47 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
     setMessage(`${result.total ?? 0}명을 확인했고, 새 계정 ${result.issued?.length ?? 0}개를 만들었습니다.`);
     showToast("학생 명단을 등록했습니다.");
     await refresh();
+  }
+
+  async function addSingleStudent(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true); setError(""); setMessage("");
+    const response = await fetch("/api/teacher/students", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ loginId: newStudentLoginId, name: newStudentName }),
+    });
+    const result = (await response.json()) as { message?: string; credential?: Credential };
+    setBusy(false);
+    if (!response.ok || !result.credential) {
+      const text = result.message ?? "학생을 추가하지 못했습니다.";
+      setError(text); showToast(text, "error"); return;
+    }
+    setCredentials([result.credential]);
+    setMessage("학생 계정을 추가했습니다. 임시 비밀번호는 지금만 확인할 수 있습니다.");
+    setNewStudentLoginId(""); setNewStudentName("");
+    setClassNumber(result.credential.classNumber ?? classNumber);
+    showToast("학생 계정을 추가했습니다.");
+    await refresh();
+  }
+
+  async function changeStudentStatus(action: "deactivate" | "restore", studentId: string) {
+    setBusy(true); setError("");
+    const response = await fetch("/api/teacher/students", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, studentId }),
+    });
+    const result = (await response.json()) as { message?: string };
+    setBusy(false);
+    if (!response.ok) {
+      const text = result.message ?? "학생 계정을 변경하지 못했습니다.";
+      setError(text); showToast(text, "error"); return false;
+    }
+    showToast(action === "deactivate" ? "학생 계정을 비활성화했습니다." : "학생 계정을 복원했습니다.");
+    setDeactivatingStudentId(null); setDeactivateConfirmation("");
+    await refresh();
+    return true;
   }
 
   async function teamAction(body: Record<string, unknown>, successMessage = "팀 정보를 변경했습니다.") {
@@ -221,8 +271,25 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
       </section>
 
       <section className="card card-body no-print">
-        <h2 className="section-heading">학생 명단 등록</h2>
-        <p className="section-subtitle">열 제목은 원본과 같은 ‘반, 번호, 성명, 조 번호’를 사용합니다. 기존 학생의 비밀번호는 재업로드해도 바뀌지 않습니다.</p>
+        <h2 className="section-heading">학생 개별 추가</h2>
+        <p className="section-subtitle">전입·누락 학생은 5자리 학번과 이름으로 바로 추가합니다. 새 학생은 미배정 상태로 등록됩니다.</p>
+        <form className="student-add-form" onSubmit={addSingleStudent}>
+          <div>
+            <label className="label" htmlFor="newStudentLoginId">5자리 학번</label>
+            <input id="newStudentLoginId" className="input" inputMode="numeric" pattern="1(0[1-9])(0[1-9]|[1-9][0-9])" maxLength={5} value={newStudentLoginId} onChange={(event) => setNewStudentLoginId(event.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="예: 10901" required />
+          </div>
+          <div>
+            <label className="label" htmlFor="newStudentName">이름</label>
+            <input id="newStudentName" className="input" maxLength={80} value={newStudentName} onChange={(event) => setNewStudentName(event.target.value)} autoComplete="off" required />
+          </div>
+          <button className="button" disabled={busy || newStudentLoginId.length !== 5 || !newStudentName.trim()}>{busy ? "처리 중…" : "학생 추가"}</button>
+        </form>
+        <p className="notice-box student-account-note">추가 직후 표시되는 임시 비밀번호를 학생에게 직접 전달하세요. 비밀번호 원문은 다시 볼 수 없습니다.</p>
+      </section>
+
+      <section className="card card-body no-print">
+        <h2 className="section-heading">학생 명단 Excel 등록</h2>
+        <p className="section-subtitle">여러 명을 등록할 때 사용합니다. 열 제목은 원본과 같은 ‘반, 번호, 성명, 조 번호’를 사용하며 기존 학생의 비밀번호는 바뀌지 않습니다.</p>
         <form onSubmit={uploadRoster} className="drop-zone">
           <div>
             <div style={{ fontSize: 28, marginBottom: 8 }}>📊</div>
@@ -276,6 +343,9 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
               <button className="button secondary" type="button" onClick={() => setShowArchived((value) => !value)} aria-expanded={showArchived}>
                 보관 팀 {visibleArchivedTeams.length}개
               </button>
+              <button className="button secondary" type="button" onClick={() => setShowInactiveStudents((value) => !value)} aria-expanded={showInactiveStudents}>
+                비활성 학생 {visibleInactiveStudents.length}명
+              </button>
             </div>
           </div>
         </div>
@@ -284,7 +354,8 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
             <thead><tr><th>학번</th><th>이름</th><th>현재 팀</th><th>팀장</th><th>계정</th><th>관리</th></tr></thead>
             <tbody>
               {visibleStudents.map((student) => (
-                <tr key={student.id}>
+                <Fragment key={student.id}>
+                <tr>
                   <td>{student.loginId}</td>
                   <td><b>{student.name}</b></td>
                   <td>
@@ -300,13 +371,56 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
                   </td>
                   <td>{student.teamId ? <button className={`button ${student.isLeader ? "" : "secondary"}`} disabled={busy || student.isLeader} onClick={() => teamAction({ action: "leader", studentId: student.id, teamId: student.teamId }, "팀장을 지정했습니다.")}>{student.isLeader ? "팀장" : "지정"}</button> : "—"}</td>
                   <td><span className={`badge ${student.mustChangePassword ? "pending" : ""}`}>{student.mustChangePassword ? "첫 로그인 전" : "사용 중"}</span></td>
-                  <td><button className="button ghost" disabled={busy} onClick={() => resetPassword(student.id)}>비밀번호 초기화</button></td>
+                  <td>
+                    <div className="student-management-actions">
+                      <button className="button ghost" disabled={busy} onClick={() => resetPassword(student.id)}>비밀번호 초기화</button>
+                      <button className="button danger" type="button" disabled={busy} onClick={() => { setDeactivatingStudentId(student.id); setDeactivateConfirmation(""); }}>비활성화</button>
+                    </div>
+                  </td>
                 </tr>
+                {deactivatingStudentId === student.id ? (
+                  <tr className="student-confirmation-row">
+                    <td colSpan={6}>
+                      <div className="archive-confirmation" role="group" aria-label="학생 계정 비활성화 확인">
+                        <p>로그인과 현재 팀 접근을 중지하지만 과거 기록은 보존합니다. 계속하려면 학번 <b>{student.loginId}</b>을(를) 입력하세요.</p>
+                        <label className="sr-only" htmlFor={`deactivate-${student.id}`}>비활성화 확인 학번</label>
+                        <input id={`deactivate-${student.id}`} className="input" inputMode="numeric" autoComplete="off" value={deactivateConfirmation} onChange={(event) => setDeactivateConfirmation(event.target.value)} placeholder={student.loginId} />
+                        <div className="toolbar-group">
+                          <button className="button danger" type="button" disabled={busy || deactivateConfirmation.trim() !== student.loginId} onClick={() => changeStudentStatus("deactivate", student.id)}>계정 비활성화</button>
+                          <button className="button secondary" type="button" disabled={busy} onClick={() => { setDeactivatingStudentId(null); setDeactivateConfirmation(""); }}>취소</button>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+                </Fragment>
               ))}
               {!visibleStudents.length ? <tr><td colSpan={6} className="empty-state">이 학급에 등록된 학생이 없습니다.</td></tr> : null}
             </tbody>
           </table>
         </div>
+        {showInactiveStudents ? (
+          <div className="card-body inactive-student-list" aria-label={`${classNumber}반 비활성 학생`}>
+            <h3 className="section-heading">비활성 학생</h3>
+            <p className="section-subtitle">과거 기록은 보존됩니다. 복원하면 로그인할 수 있지만 팀에는 자동으로 재배정되지 않습니다.</p>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead><tr><th>학번</th><th>이름</th><th>상태</th><th>관리</th></tr></thead>
+                <tbody>
+                  {visibleInactiveStudents.map((student) => (
+                    <tr key={student.id}>
+                      <td>{student.loginId}</td>
+                      <td><b>{student.name}</b></td>
+                      <td><span className="badge feedback">로그인 중지</span></td>
+                      <td><button className="button secondary" type="button" disabled={busy} onClick={() => changeStudentStatus("restore", student.id)}>복원</button></td>
+                    </tr>
+                  ))}
+                  {!visibleInactiveStudents.length ? <tr><td colSpan={4} className="empty-state">이 학급에 비활성 학생이 없습니다.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
         <div className="card-body team-storage-section">
           <h3 className="section-heading">현재 팀 관리</h3>
           <div className="team-management-grid">

@@ -457,6 +457,13 @@ a {
 .archive-confirmation { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid #eadca8; }
 .archive-confirmation p { margin: 0; color: #624c19; font-size: 13px; }
 .archived-team-list { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.student-add-form { display: grid; grid-template-columns: minmax(180px, 240px) minmax(180px, 1fr) auto; gap: 12px; align-items: end; }
+.student-add-form .label { display: block; margin-bottom: 7px; }
+.student-account-note { margin: 14px 0 0; }
+.student-management-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.student-confirmation-row td { background: #fffdf5; }
+.student-confirmation-row .archive-confirmation { max-width: 720px; padding: 4px 0; border-top: 0; }
+.inactive-student-list { border-top: 1px solid var(--line); background: #fafaf8; }
 
 @media (max-width: 900px) {
   .progress-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -749,6 +756,7 @@ a {
   .evaluation-choices { grid-template-columns: 1fr; }
   .evaluation-choice.unavailable { grid-column: auto; }
   .summary-editor { grid-template-columns: 1fr; }
+  .student-add-form { grid-template-columns: 1fr; align-items: stretch; }
 }
 
 @media (max-width: 520px) {
