@@ -36,6 +36,7 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
   const [classNumber, setClassNumber] = useState(9);
   const [progressClassNumber, setProgressClassNumber] = useState(0);
   const [attentionFilter, setAttentionFilter] = useState<"all" | "teacher" | "student">("all");
+  const [expandedClasses, setExpandedClasses] = useState<Record<number, boolean>>({});
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -248,11 +249,14 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
             <article className="metric attention-metric"><span>교사 확인 필요</span><strong>{progressSummary.teacherAttention}</strong></article>
           </div>
         </div>
+        <div className="toolbar-group card-body no-print"><button className="button secondary" onClick={() => setExpandedClasses(Object.fromEntries(Array.from({length:9},(_,i)=>[i+1,true])))}>모든 반 펼치기</button><button className="button secondary" onClick={() => setExpandedClasses({})}>모든 반 접기</button></div>
+        {[...new Set(progressTeams.map(team=>team.classNumber))].sort((a,b)=>a-b).map(number => <details className="class-group" key={number} open={Boolean(expandedClasses[number])} onToggle={event=>{const open=event.currentTarget.open;setExpandedClasses(previous=>previous[number]===open?previous:{...previous,[number]:open});}}>
+        <summary>{number}반 <span className="badge">{progressTeams.filter(t=>t.classNumber===number).length}팀</span> <span>교사 확인 {progressTeams.filter(t=>t.classNumber===number&&t.attention==='teacher').length}팀</span></summary>
         <div className="table-wrap">
           <table className="data-table progress-table">
             <thead><tr><th>학급·팀</th><th>탐구 주제</th><th>이론 탐색</th><th>계획서</th><th>개인 일지</th><th>보고서</th><th>확인 필요</th><th>최근 활동</th><th>바로가기</th></tr></thead>
             <tbody>
-              {progressTeams.map((team) => (
+              {progressTeams.filter(team=>team.classNumber===number).map((team) => (
                 <tr key={team.id} className={team.attention === "teacher" ? "needs-teacher" : ""}>
                   <td><b>{team.classNumber}반 {team.name}</b><br /><small>{team.memberCount}명</small></td>
                   <td>{team.topic || "주제 탐색 중"}</td>
@@ -269,6 +273,8 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
             </tbody>
           </table>
         </div>
+        </details>)}
+        {!progressTeams.length ? <p className="empty-state">선택한 조건에 해당하는 팀이 없습니다.</p> : null}
       </section>
 
       <section className="grid four metrics-grid no-print" aria-label="계정과 팀 편성 현황">

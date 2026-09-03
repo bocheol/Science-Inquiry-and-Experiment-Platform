@@ -99,7 +99,7 @@ export function PlanEditor({ data, currentUserId, onRefresh }: { data: InquiryDa
   return (
     <div className="plan-layout">
       <section className="card plan-form">
-        <div className="page-title" style={{ marginBottom: 8 }}><div><h1 style={{ fontSize: 26 }}>팀 탐구 계획서</h1><p>{data.team.classNumber}반 {data.team.name} · 팀원 정보는 자동으로 포함됩니다.</p></div><span className={`badge ${data.plan.reviewStatus}`}>{statusText[data.plan.reviewStatus]}</span></div>
+        <div className="page-title" style={{ marginBottom: 8 }}><div><h1 style={{ fontSize: 26 }}>팀 탐구 계획서</h1><p>{data.team.activityName ?? `${data.team.classNumber}반`} {data.team.name} · 팀원 정보는 자동으로 포함됩니다.</p></div><span className={`badge ${data.plan.reviewStatus}`}>{statusText[data.plan.reviewStatus]}</span></div>
         {data.plan.teacherFeedback ? <div className="warning-box"><b>선생님 피드백</b><br />{data.plan.teacherFeedback}</div> : null}
         {error ? <div className="error-box">{error}</div> : null}
         {PLAN_FIELDS.map((field) => {

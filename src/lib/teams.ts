@@ -49,7 +49,8 @@ export async function assignStudent(actorId: string, studentId: string, teamId: 
   if (!valid.rows[0]) throw new Error("활성 학생과 활성 팀의 학급이 같은지 확인해 주세요.");
   await db.query(
     `UPDATE team_members SET status = 'inactive', left_at = CURRENT_TIMESTAMP
-      WHERE user_id = $1 AND status = 'active' AND team_id <> $2`,
+      WHERE user_id = $1 AND status = 'active' AND team_id <> $2
+        AND team_id IN (SELECT id FROM teams WHERE club_id IS NULL)`,
     [studentId, teamId],
   );
   const membership = await db.query(
@@ -89,16 +90,16 @@ export async function setTeamLeader(actorId: string, teamId: string, studentId: 
 
 export async function archiveTeam(actorId: string, teamId: string, confirmation: string) {
   const db = await getDb();
-  const result = await db.query<{ name: string; class_number: number; status: string }>(
-    `SELECT t.name, c.class_number, t.status
-       FROM teams t JOIN classes c ON c.id = t.class_id
+  const result = await db.query<{ name: string; class_number: number; club_name: string | null; status: string }>(
+    `SELECT t.name, c.class_number, cl.name AS club_name, t.status
+       FROM teams t LEFT JOIN classes c ON c.id = t.class_id LEFT JOIN clubs cl ON cl.id = t.club_id
       WHERE t.id = $1`,
     [teamId],
   );
   const team = result.rows[0];
   if (!team) throw new Error("팀을 찾을 수 없습니다.");
   if (team.status !== "active") throw new Error("이미 보관된 팀입니다.");
-  const expected = `${team.class_number}반 ${team.name}`;
+  const expected = `${team.club_name ?? `${team.class_number}반`} ${team.name}`;
   if (confirmation.trim() !== expected) throw new Error(`확인 문구로 '${expected}'을(를) 정확히 입력해 주세요.`);
   await db.query(
     `UPDATE teams SET status = 'archived', archived_at = CURRENT_TIMESTAMP, archived_by = $1

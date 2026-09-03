@@ -103,12 +103,13 @@ export async function reviewPlan(
   let actionNoticeId: string | null = null;
   try {
     await client.query("BEGIN");
-    const current = await client.query<{ review_status: string; class_number: number; team_name: string; team_id: string }>(
-      `SELECT p.review_status, c.class_number, t.name AS team_name, t.id AS team_id
+    const current = await client.query<{ review_status: string; class_number: number; club_name: string | null; team_name: string; team_id: string }>(
+      `SELECT p.review_status, c.class_number, cl.name AS club_name, t.name AS team_name, t.id AS team_id
          FROM investigation_plans p
          JOIN inquiry_sessions s ON s.id = p.session_id
          JOIN teams t ON t.id = s.team_id
-         JOIN classes c ON c.id = t.class_id
+         LEFT JOIN classes c ON c.id = t.class_id
+         LEFT JOIN clubs cl ON cl.id = t.club_id
         WHERE p.id = $1`,
       [planId],
     );
@@ -118,7 +119,7 @@ export async function reviewPlan(
 
     if (plan.review_status === "approved") {
       if (decision === "approved") throw new Error("이미 승인된 계획서입니다.");
-      const expectedConfirmation = `${plan.class_number}반 ${plan.team_name}`;
+      const expectedConfirmation = `${plan.club_name ?? `${plan.class_number}반`} ${plan.team_name}`;
       if (confirmation.trim() !== expectedConfirmation) {
         throw new Error(`승인 상태를 변경하려면 '${expectedConfirmation}'을(를) 정확히 입력해 주세요.`);
       }

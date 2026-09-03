@@ -1,0 +1,21 @@
+import { afterEach, expect, it, vi } from 'vitest';
+const mocks = vi.hoisted(() => ({ create: vi.fn() }));
+vi.mock('openai', () => ({ default: class { responses = { create: mocks.create }; } }));
+import { sendTeamMessage } from '@/lib/ai';
+import { getDb } from '@/lib/db';
+import { getDiscussionData, seoulDate } from '@/lib/discussions';
+afterEach(() => vi.unstubAllEnvs());
+it('preserves saved questions on AI failure, marks their day, redacts input and keeps approved inquiry stage', async () => {
+  vi.stubEnv('OPENAI_API_KEY', 'synthetic-test-key');
+  mocks.create.mockRejectedValueOnce(new Error('synthetic unavailable'));
+  await expect(sendTeamMessage('demo_session_1', 'demo_team_1', {id:'demo_student_1',alias:'팀원 A'}, '김하늘 10901 질문입니다.')).rejects.toThrow();
+  const actor = {id:'teacher_bootstrap', role:'teacher' as const,mustChangePassword:false};
+  const before = await getDiscussionData(actor, 'demo_session_1', seoulDate());
+  expect(before.sources).toHaveLength(1); expect(before.jobs).toHaveLength(1);
+  mocks.create.mockResolvedValueOnce({ output_text:'어떤 변인을 같게 할까요?',output:[],model:'synthetic' });
+  await sendTeamMessage('demo_session_1', 'demo_team_1', {id:'demo_student_1',alias:'팀원 A'}, '이새봄 10902 측정 방법을 물었다.');
+  expect(mocks.create.mock.calls[1][0].input).not.toMatch(/김하늘|10901|이새봄|10902/);
+  const db = await getDb();
+  expect((await db.query("SELECT stage FROM inquiry_sessions WHERE id = 'demo_session_1'")).rows[0].stage).toBe('EXPERIMENTING');
+  expect((await getDiscussionData(actor, 'demo_session_1', seoulDate())).sources).toHaveLength(3);
+});

@@ -310,7 +310,7 @@ async function activeMemberContext(studentId: string): Promise<MemberContext> {
        JOIN teams t ON t.id = tm.team_id
        JOIN inquiry_sessions s ON s.team_id = t.id
        JOIN users u ON u.id = tm.user_id
-      WHERE tm.user_id = $1 AND tm.status = 'active' AND u.status = 'active' AND t.status = 'active'
+      WHERE tm.user_id = $1 AND tm.status = 'active' AND u.status = 'active' AND t.status = 'active' AND t.club_id IS NULL
       ORDER BY tm.joined_at DESC LIMIT 1`,
     [studentId],
   );

@@ -8,10 +8,11 @@ import { TeacherReportReview } from "@/components/teacher-report-review";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { DocumentHistoryPanel } from "@/components/document-history-panel";
 import { useToast } from "@/components/toast-provider";
+import { DiscussionPanel } from "@/components/discussion-panel";
 
 const statusText: Record<string, string> = { draft: "작성 중", pending: "승인 대기", feedback: "수정 요청", approved: "승인됨", reapproval_required: "재승인 필요" };
 
-export function TeacherTeamReview({ data }: { data: InquiryData }) {
+export function TeacherTeamReview({ data, currentUserId }: { data: InquiryData; currentUserId: string }) {
   const router = useRouter();
   const { showToast } = useToast();
   const [feedback, setFeedback] = useState(data.plan.teacherFeedback ?? "");
@@ -20,7 +21,7 @@ export function TeacherTeamReview({ data }: { data: InquiryData }) {
   const [error, setError] = useState("");
   const [changingApprovedPlan, setChangingApprovedPlan] = useState(false);
   const [confirmation, setConfirmation] = useState("");
-  const confirmationText = `${data.team.classNumber}반 ${data.team.name}`;
+  const confirmationText = `${data.team.clubId ? data.team.activityName : `${data.team.classNumber}반`} ${data.team.name}`;
 
   async function review(decision: "approved" | "feedback") {
     setBusy(true); setError(""); setMessage("");
@@ -74,11 +75,12 @@ export function TeacherTeamReview({ data }: { data: InquiryData }) {
   return (
     <div className="stack">
       <section className="team-banner">
-        <div><h1>{data.team.classNumber}반 {data.team.name}</h1><p>{data.session.selectedTopic || "탐구 주제 미확정"}</p></div>
+        <div><h1>{data.team.activityName ?? `${data.team.classNumber}반`} · {data.team.name}</h1><p>{data.session.selectedTopic || "탐구 주제 미확정"}</p></div>
         <div className="member-list">{data.members.map((member) => <span className="member-pill" key={member.id}>{member.isLeader ? "⭐ " : ""}{member.name} ({member.loginId})</span>)}</div>
       </section>
       {error ? <div className="error-box">{error}</div> : null}
       {message ? <div className="notice-box">{message}</div> : null}
+      <section className="card card-body"><DiscussionPanel sessionId={data.session.id} currentUserId={currentUserId} members={data.members} readOnly /></section>
       <section className="grid two">
         <article className="card card-body">
           <div className="toolbar"><h2 className="section-heading">탐구 계획서</h2><span className={`badge ${data.plan.reviewStatus}`}>{statusText[data.plan.reviewStatus]}</span></div>

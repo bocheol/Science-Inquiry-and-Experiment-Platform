@@ -117,7 +117,8 @@ export async function importRoster(buffer: ArrayBuffer, actorId: string) {
         );
         await client.query(
           `UPDATE team_members SET status = 'inactive', left_at = CURRENT_TIMESTAMP
-            WHERE user_id = $1 AND status = 'active' AND team_id <> $2`,
+            WHERE user_id = $1 AND status = 'active' AND team_id <> $2
+              AND team_id IN (SELECT id FROM teams WHERE club_id IS NULL)`,
           [record.userId, teamId],
         );
         const membership = await client.query(
@@ -146,4 +147,3 @@ export async function importRoster(buffer: ArrayBuffer, actorId: string) {
   });
   return { total: records.length, issued };
 }
-

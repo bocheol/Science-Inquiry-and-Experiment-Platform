@@ -136,7 +136,7 @@ export function ReportEditor({ data, currentUserId, onRefresh }: { data: Inquiry
             <ReportFieldHeading fieldKey="title" label="연구주제" lockMap={lockMap} currentUserId={currentUserId} editing={editing} />
             <input className="input" value={String(form.title ?? "")} disabled={Boolean(lockMap.get("title") && lockMap.get("title")!.userId !== currentUserId)} onFocus={() => lock("title", "acquire")} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} onBlur={() => saveField("title", String(form.title ?? ""))} maxLength={500} />
           </div>
-          <div className="report-cover-meta"><div><span>팀명</span><b>{data.team.name}</b></div><div><span>학급</span><b>{data.team.classNumber}반</b></div></div>
+          <div className="report-cover-meta"><div><span>팀명</span><b>{data.team.name}</b></div><div><span>{data.team.clubId ? '동아리' : '학급'}</span><b>{data.team.activityName ?? `${data.team.classNumber}반`}</b></div></div>
           <div className="table-wrap">
             <table className="data-table report-role-table">
               <thead><tr><th>학번</th><th>이름</th><th>구분</th><th>팀원별 역할</th></tr></thead>

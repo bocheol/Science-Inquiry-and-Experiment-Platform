@@ -107,6 +107,7 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
          FROM users u
          JOIN classes c ON c.id = u.class_id
          LEFT JOIN team_members tm ON tm.user_id = u.id AND tm.status = 'active'
+           AND tm.team_id IN (SELECT id FROM teams WHERE club_id IS NULL)
          LEFT JOIN teams t ON t.id = tm.team_id AND t.status = 'active'
         WHERE u.role = 'student' AND u.status = 'active'
         ORDER BY c.class_number, u.login_id`,

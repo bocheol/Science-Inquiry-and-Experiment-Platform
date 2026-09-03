@@ -341,7 +341,7 @@ export async function createActionNotice(
        source_type, source_id, action_path)
      VALUES ($1, 'action_request', $2, $3, $4, 'team', $5, $6, 'important', $7, $8, $9)`,
     [noticeId, input.teacherId, `${label} 수정 요청`, input.content.trim(), team.rows[0].class_id,
-      input.teamId, input.sourceType, input.sourceId, `/inquiry#${input.sourceType}`],
+      input.teamId, input.sourceType, input.sourceId, team.rows[0].class_id ? `/inquiry#${input.sourceType}` : `/inquiry?team=${encodeURIComponent(input.teamId)}#${input.sourceType}`],
   );
   return noticeId;
 }

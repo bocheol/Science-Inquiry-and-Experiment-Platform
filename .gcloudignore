@@ -1,4 +1,7 @@
 node_modules
+.npm-cache
+.stale-node_modules*
+ERROR
 .pnpm-store
 .next
 .git

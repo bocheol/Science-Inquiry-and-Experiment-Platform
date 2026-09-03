@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 
 export type AiFeature =
+  | "daily_summary"
   | "topic_suggestions"
   | "team_chat"
   | "team_research"
@@ -13,6 +14,7 @@ type AiRuntime = {
 };
 
 const FEATURE_DEFAULTS: Record<AiFeature, { envName: string; model: string }> = {
+  daily_summary: { envName: "OPENAI_SUMMARY_MODEL", model: "gpt-5.6-luna" },
   topic_suggestions: { envName: "OPENAI_TOPIC_MODEL", model: "gpt-5.6-terra" },
   team_chat: { envName: "OPENAI_TEAM_CHAT_MODEL", model: "gpt-5.6-luna" },
   team_research: { envName: "OPENAI_TEAM_RESEARCH_MODEL", model: "gpt-5.6-terra" },

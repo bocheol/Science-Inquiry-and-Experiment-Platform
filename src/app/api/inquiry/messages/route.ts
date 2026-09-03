@@ -9,7 +9,7 @@ const schema = z.object({ sessionId: z.string(), content: z.string().trim().min(
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
-  if (!user || user.role !== "student") return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
+  if (!user || user.role !== "student" || user.mustChangePassword) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ message: "질문을 입력해 주세요." }, { status: 400 });
   try {

@@ -1,6 +1,9 @@
 type GuideEntry = { title: string; keywords: string[]; answer: string };
 
 export const PLATFORM_GUIDE_ENTRIES: GuideEntry[] = [
+  { title: "동아리와 과탐실 전환", keywords: ["동아리", "2학년", "활동 전환", "중복"], answer: "교사 대시보드 상단에서 과탐실·동아리를 선택합니다. 동아리 이름을 만든 뒤 팀 생성, 5자리 학번 등록, 팀 배정을 진행합니다. 기존 학생은 같은 계정으로 두 활동에 참여하며 비밀번호가 바뀌지 않습니다. 신규 2학년은 등록 직후 임시 비밀번호를 전달합니다. 학생 화면에서는 소속 활동을 선택할 수 있습니다. 동아리 일지는 계획 승인 후 열리며 과탐실 준비물 시트와 연결하지 않습니다." },
+  { title: "우리끼리 대화·대면 기록·날짜별 AI 정리", keywords: ["우리끼리", "대면", "메모", "날짜별", "요약", "탐구 흐름"], answer: "학생은 대화·활동 기록에서 원격 텍스트 대화를 나누거나, 활동 날짜와 참여자를 골라 대면 메모를 저장합니다. 원문은 보존하며 보완은 별도로 추가합니다. 대면 메모는 저장 직후, 원격 대화와 AI 탐구 대화는 다음 날 자동으로 정리합니다. 교사는 팀 확인에서 모든 원문·날짜별 정리·탐구 흐름을 보고 근거 버튼으로 원문을 확인합니다. AI 정리는 평가 문장이 아닌 확인용 초안입니다." },
+  { title: "반별 팀 목록 접기", keywords: ["접기", "펼치기", "토글", "반별"], answer: "과탐실 대시보드에서 반 제목을 누르면 해당 반 팀 목록을 접거나 펼칩니다. 모든 반 펼치기·접기도 사용할 수 있습니다. 동아리 화면은 동아리 제목을 눌러 해당 팀들을 접고 펼칩니다." },
   { title: "개인정보·권한 보호", keywords: ["개인정보", "학생 자료", "학생 기록", "비밀번호", "대신 변경", "대신 삭제"], answer: "도움말은 학생 개인정보·비밀번호·학생 작성 자료를 조회하거나 외부 AI에 전달하지 않으며, 어떤 학생 자료도 대신 변경·삭제하지 않습니다. 필요한 처리는 교사가 해당 관리 화면에서 권한과 대상을 직접 확인한 뒤 수행해야 합니다." },
   { title: "학생 최초 로그인", keywords: ["학생", "로그인", "최초", "임시", "비밀번호", "변경"], answer: "학생은 5자리 학번과 배부받은 임시 비밀번호로 로그인한 뒤, 첫 화면에서 8자 이상이며 글자와 숫자가 포함된 본인 비밀번호로 변경합니다." },
   { title: "학생 비밀번호 초기화", keywords: ["비밀번호", "분실", "초기화", "재발급"], answer: "교사 대시보드의 학생 명단에서 해당 학생의 비밀번호 초기화를 실행합니다. 새 임시 비밀번호는 학생에게 직접 전달하고 문서나 메신저에 장기 보관하지 마세요." },
@@ -24,7 +27,7 @@ export function answerPlatformGuideQuestion(rawQuestion: string) {
   const normalized = question.toLocaleLowerCase("ko-KR");
   const protectedDataRequest = /(학생|특정|개인).*(개인정보|비밀번호|자료|기록).*(읽|보여|알려|전달|변경|바꿔|삭제)|(?:비밀번호|학생 자료|학생 기록).*(읽|보여|알려|전달|변경|바꿔|삭제)/i.test(normalized);
   if (protectedDataRequest) {
-    const entry = PLATFORM_GUIDE_ENTRIES[0]!;
+    const entry = PLATFORM_GUIDE_ENTRIES.find(item => item.title === "개인정보·권한 보호")!;
     return { answer: `${entry.title}: ${entry.answer}`, sources: [entry.title] };
   }
   const scored = PLATFORM_GUIDE_ENTRIES.map((entry) => ({

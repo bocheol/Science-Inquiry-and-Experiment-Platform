@@ -13,6 +13,36 @@
   --shadow: 0 18px 50px rgba(22, 56, 46, 0.1);
 }
 
+[hidden] { display: none !important; }
+.activity-picker { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.class-group { border: 1px solid var(--line); border-radius: 14px; margin: 12px; background: var(--surface); overflow: hidden; }
+.class-group > summary { cursor: pointer; padding: 18px 20px; font-size: 1.05rem; font-weight: 700; background: var(--brand-soft); }
+.class-group > summary > span { margin-left: 12px; font-size: .85rem; font-weight: 500; }
+summary:focus-visible { outline: 3px solid var(--brand); outline-offset: -3px; }
+.discussion-panel { min-width: 0; }
+.discussion-panel .toolbar-group { flex-wrap: wrap; }
+.discussion-panel .textarea { min-height: 95px; }
+.discussion-messages { max-height: 480px; min-height: 160px; overflow-y: auto; overscroll-behavior: contain; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }
+.discussion-messages .message-row { justify-content: flex-start; }
+.discussion-messages .message-bubble { max-width: 90%; overflow-wrap: anywhere; }
+.discussion-note { border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; overflow-wrap: anywhere; background: var(--surface); }
+.discussion-note > summary { cursor: pointer; font-weight: 700; }
+.discussion-summary-grid, .club-team-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.discussion-summary-grid > section { border: 1px solid var(--line); border-radius: 14px; padding: 16px; overflow-wrap: anywhere; }
+.discussion-summary-grid ul { padding-left: 20px; }
+.discussion-summary-grid p { margin: 8px 0; }
+.discussion-evidence { border: 2px solid var(--brand); border-radius: 14px; padding: 20px; background: var(--brand-soft); overflow-wrap: anywhere; }
+.discussion-panel fieldset { border: 1px solid var(--line); border-radius: 10px; }
+.discussion-panel fieldset label { padding: 8px; }
+.discussion-panel h3, .club-team-grid h3 { margin-top: 0; }
+@media (max-width: 640px) {
+  .discussion-summary-grid, .club-team-grid { grid-template-columns: 1fr; }
+  .class-group { margin: 8px 0; }
+  .class-group > summary { padding: 16px 12px; }
+  .discussion-note, .discussion-evidence { padding: 14px; }
+  .discussion-panel .button { white-space: normal; }
+}
+
 * {
   box-sizing: border-box;
 }

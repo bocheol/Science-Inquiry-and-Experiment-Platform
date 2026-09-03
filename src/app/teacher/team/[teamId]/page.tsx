@@ -11,6 +11,5 @@ export default async function TeamReviewPage({ params }: { params: Promise<{ tea
   const { teamId } = await params;
   const data = await getInquiryDataForTeam(teamId);
   if (!data) notFound();
-  return <><AppHeader name={user.name} role="teacher" /><main className="page-shell"><div className="toolbar no-print"><a className="button secondary" href="/teacher">← 대시보드</a></div><TeacherTeamReview data={data} /></main></>;
+  return <><AppHeader name={user.name} role="teacher" /><main className="page-shell"><div className="toolbar no-print"><a className="button secondary" href="/teacher">← 대시보드</a></div><TeacherTeamReview data={data} currentUserId={user.id} /></main></>;
 }
-

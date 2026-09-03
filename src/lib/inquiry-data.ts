@@ -5,7 +5,7 @@ import { getDocumentHistory } from "@/lib/document-history";
 type DocumentHistoryItem = { id: string; action: string; actorName: string; createdAt: string };
 
 export type InquiryData = {
-  team: { id: string; name: string; teamNumber: number; classNumber: number; leaderUserId: string | null };
+  team: { id: string; name: string; teamNumber: number; classNumber: number; leaderUserId: string | null; clubId?: string | null; activityName?: string };
   session: {
     id: string;
     stage: string;
@@ -79,6 +79,8 @@ async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
     name: string;
     team_number: number;
     class_number: number;
+    club_id: string | null;
+    activity_name: string;
     leader_user_id: string | null;
     session_id: string | null;
     stage: string | null;
@@ -87,11 +89,12 @@ async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
     ai_busy: boolean;
     ai_topic_suggestions: { directions?: TopicSuggestion[] } | string;
   }>(
-    `SELECT t.id, t.name, t.team_number, c.class_number, t.leader_user_id,
+    `SELECT t.id, t.name, t.team_number, c.class_number, t.club_id, COALESCE(c.name, cl.name) AS activity_name, t.leader_user_id,
             s.id AS session_id, s.stage, s.selected_topic, s.interest_input,
             s.ai_busy, s.ai_topic_suggestions
        FROM teams t
-       JOIN classes c ON c.id = t.class_id
+       LEFT JOIN classes c ON c.id = t.class_id
+       LEFT JOIN clubs cl ON cl.id = t.club_id
        LEFT JOIN inquiry_sessions s ON s.team_id = t.id
       WHERE t.id = $1`,
     [teamId],
@@ -210,6 +213,8 @@ async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
       name: team.name,
       teamNumber: team.team_number,
       classNumber: team.class_number,
+      clubId: team.club_id,
+      activityName: team.activity_name,
       leaderUserId: team.leader_user_id,
     },
     session: {
@@ -284,13 +289,14 @@ async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
   };
 }
 
-export async function getInquiryDataForUser(userId: string) {
+export async function getInquiryDataForUser(userId: string, selectedTeamId?: string) {
   const db = await getDb();
   const membership = await db.query<{ team_id: string }>(
     `SELECT tm.team_id FROM team_members tm JOIN teams t ON t.id = tm.team_id
       WHERE tm.user_id = $1 AND tm.status = 'active' AND t.status = 'active'
-      ORDER BY tm.joined_at DESC LIMIT 1`,
-    [userId],
+        AND ($2::text IS NULL OR t.id = $2)
+      ORDER BY t.created_at, t.id LIMIT 1`,
+    [userId, selectedTeamId ?? null],
   );
   const teamId = membership.rows[0]?.team_id;
   return teamId ? buildInquiryData(teamId) : null;

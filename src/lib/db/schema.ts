@@ -1,3 +1,5 @@
+import { DISCUSSION_SCHEMA_SQL } from "@/lib/discussion-schema";
+
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS classes (
   id TEXT PRIMARY KEY,
@@ -22,6 +24,23 @@ CREATE TABLE IF NOT EXISTS users (
   UNIQUE (academic_year, login_id)
 );
 
+CREATE TABLE IF NOT EXISTS clubs (
+  id TEXT PRIMARY KEY,
+  academic_year INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS club_members (
+  club_id TEXT NOT NULL REFERENCES clubs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'active',
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  left_at TIMESTAMPTZ,
+  PRIMARY KEY (club_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS teams (
   id TEXT PRIMARY KEY,
   class_id TEXT NOT NULL REFERENCES classes(id),
@@ -38,6 +57,9 @@ CREATE TABLE IF NOT EXISTS teams (
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS archived_by TEXT REFERENCES users(id);
+ALTER TABLE teams ALTER COLUMN class_id DROP NOT NULL;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS club_id TEXT REFERENCES clubs(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_club_team_number ON teams(club_id, team_number);
 
 CREATE TABLE IF NOT EXISTS team_members (
   id TEXT PRIMARY KEY,
@@ -400,6 +422,8 @@ CREATE INDEX IF NOT EXISTS idx_notices_audience ON notices(audience_type, class_
 CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source_type, source_id, resolved_at);
 CREATE INDEX IF NOT EXISTS idx_notice_reads_user ON notice_reads(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id, updated_at DESC);
+
+${DISCUSSION_SCHEMA_SQL}
 
 INSERT INTO reports (id, session_id)
 SELECT 'report_' || id, id FROM inquiry_sessions

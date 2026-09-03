@@ -8,7 +8,7 @@ const schema = z.object({ studentId: z.string().min(1) });
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
-  if (!user || user.role !== "teacher") return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
+  if (!user || user.role !== "teacher" || user.mustChangePassword) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ message: "학생을 확인해 주세요." }, { status: 400 });
   const db = await getDb();
@@ -25,4 +25,3 @@ export async function POST(request: Request) {
     credential: { name: student.rows[0].name, loginId: student.rows[0].login_id, temporaryPassword },
   });
 }
-

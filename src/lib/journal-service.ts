@@ -104,7 +104,7 @@ async function assertActiveStudentSession(client: PoolClient, studentId: string,
         AND tm.status = 'active'
         AND t.status = 'active'
         AND p.review_status = 'approved'
-        AND mr.id IS NOT NULL
+        AND (mr.id IS NOT NULL OR t.club_id IS NOT NULL)
         AND s.stage IN ('EXPERIMENTING', 'REPORTING', 'EXAMINING', 'EVALUATING', 'COMPLETED')
       LIMIT 1`,
     [sessionId, studentId],
