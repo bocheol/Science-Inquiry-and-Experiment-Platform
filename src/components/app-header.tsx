@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { PushSubscriptionSync } from "@/components/push-notification-manager";
 import type { NoticeFeed } from "@/lib/notices";
 
 export function AppHeader({ name, role }: { name: string; role: "student" | "teacher" }) {
@@ -49,6 +50,7 @@ export function AppHeader({ name, role }: { name: string; role: "student" | "tea
 
   return (
     <>
+      {role === "student" ? <PushSubscriptionSync /> : null}
       <header className="app-header no-print">
         <a className="brand" href={role === "teacher" ? "/teacher" : "/inquiry"}>
           <span className="brand-mark">🔬</span>

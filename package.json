@@ -23,6 +23,7 @@
     "pg-mem": "3.0.14",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "web-push": "^3.6.7",
     "xlsx": "0.18.5",
     "zod": "4.4.3"
   },
@@ -32,6 +33,7 @@
     "@types/pg": "8.15.5",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.3",
+    "@types/web-push": "^3.6.4",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }

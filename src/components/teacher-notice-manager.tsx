@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/toast-provider";
 import type { NoticeAudience, NoticeItem, NoticePriority } from "@/lib/notices";
+import type { PushDeliverySummary } from "@/lib/push-notifications";
 
 type TargetOptions = { classes: number[]; teams: Array<{ id: string; name: string; classNumber: number }> };
 
@@ -22,6 +23,7 @@ export function TeacherNoticeManager({ targets }: { targets: TargetOptions }) {
   const [priority, setPriority] = useState<NoticePriority>("normal");
   const [calendarStart, setCalendarStart] = useState("");
   const [calendarEnd, setCalendarEnd] = useState("");
+  const [sendPush, setSendPush] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -45,13 +47,13 @@ export function TeacherNoticeManager({ targets }: { targets: TargetOptions }) {
 
   function resetForm() {
     setTitle(""); setContent(""); setAudienceType("all"); setClassNumber(targets.classes[0] ?? 1);
-    setTeamId(""); setPriority("normal"); setCalendarStart(""); setCalendarEnd(""); setEditingId(null); setError("");
+    setTeamId(""); setPriority("normal"); setCalendarStart(""); setCalendarEnd(""); setSendPush(true); setEditingId(null); setError("");
   }
 
   function editNotice(notice: NoticeItem) {
     setEditingId(notice.id); setTitle(notice.title); setContent(notice.content); setAudienceType(notice.audienceType);
     setClassNumber(notice.classNumber ?? targets.classes[0] ?? 1); setTeamId(notice.teamId ?? ""); setPriority(notice.priority);
-    setCalendarStart(notice.calendarStart ?? ""); setCalendarEnd(notice.calendarEnd ?? "");
+    setCalendarStart(notice.calendarStart ?? ""); setCalendarEnd(notice.calendarEnd ?? ""); setSendPush(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -61,20 +63,31 @@ export function TeacherNoticeManager({ targets }: { targets: TargetOptions }) {
       title, content, audienceType,
       classNumber: audienceType === "class" ? classNumber : null,
       teamId: audienceType === "team" ? teamId : null,
-      priority, calendarStart: calendarStart || null, calendarEnd: calendarEnd || null,
+      priority, calendarStart: calendarStart || null, calendarEnd: calendarEnd || null, sendPush,
     };
     const response = await fetch("/api/teacher/notices", {
       method: editingId ? "PATCH" : "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(editingId ? { action: "update", noticeId: editingId, ...payload } : payload),
     });
-    const result = (await response.json()) as { message?: string };
+    const result = (await response.json()) as { message?: string; push?: PushDeliverySummary | null };
     setBusy(false);
     if (!response.ok) {
       const message = result.message ?? "공지를 저장하지 못했습니다.";
       setError(message); showToast(message, "error"); return;
     }
-    showToast(editingId ? "공지를 수정하고 학생의 읽음 상태를 새로 시작했습니다." : "공지를 등록했습니다.");
+    if (result.push?.status === "disabled") {
+      showToast("공지는 저장했지만 서버 푸시 설정이 없어 기기 알림은 보내지 않았습니다.", "error");
+    } else if (result.push?.status === "failed") {
+      showToast("공지는 저장했지만 기기 푸시 전송을 완료하지 못했습니다.", "error");
+    } else if (result.push && result.push.targeted === 0) {
+      showToast("공지는 저장했습니다. 푸시를 켠 대상 기기는 아직 없습니다.");
+    } else if (result.push) {
+      const suffix = result.push.failed ? ` (${result.push.failed}개 실패)` : "";
+      showToast(`공지를 저장하고 ${result.push.sent}개 기기에 푸시를 보냈습니다.${suffix}`, result.push.failed ? "error" : "success");
+    } else {
+      showToast(editingId ? "공지를 수정하고 학생의 읽음 상태를 새로 시작했습니다." : "공지를 등록했습니다.");
+    }
     resetForm(); await refresh();
   }
 
@@ -114,6 +127,7 @@ export function TeacherNoticeManager({ targets }: { targets: TargetOptions }) {
             <label className="field"><span>일정 시작일 · 선택</span><input className="input" type="date" value={calendarStart} onInput={(event) => { setCalendarStart(event.currentTarget.value); if (!event.currentTarget.value) setCalendarEnd(""); }} /></label>
             <label className="field"><span>일정 종료일 · 선택</span><input className="input" type="date" min={calendarStart || undefined} disabled={!calendarStart} value={calendarEnd} onInput={(event) => setCalendarEnd(event.currentTarget.value)} /></label>
           </div>
+          <label className="push-send-option"><input type="checkbox" checked={sendPush} onChange={(event) => setSendPush(event.target.checked)} /> <span><b>대상 학생 기기에 푸시 알림 보내기</b><small>푸시를 허용한 기기에만 전송되며 공지 내용은 잠금 화면에 표시하지 않습니다.</small></span></label>
           <button className="button" disabled={busy || title.trim().length < 2 || content.trim().length < 2 || (audienceType === "team" && !teamId)}>{busy ? "저장 중…" : editingId ? "공지 수정" : "공지 게시"}</button>
         </form>
       </section>

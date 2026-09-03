@@ -10,6 +10,7 @@ service-account*.json
 .deployment-secret-files/
 teacher-login.txt
 teacher-accounts.txt
+scripts/create-teacher-accounts.mjs
 *.pem
 coverage
 output

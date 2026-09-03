@@ -2,6 +2,7 @@ import { audit, getDb } from "@/lib/db";
 import { REPORT_FIELDS } from "@/lib/constants";
 import { recordReportRevision } from "@/lib/document-history";
 import { createActionNotice, resolveActionNotices } from "@/lib/notices";
+import { sendPushForNotice } from "@/lib/push-notifications";
 
 const ALLOWED_FIELDS = new Set(["title", ...REPORT_FIELDS.map((field) => field.key)]);
 const REPORT_STAGES = new Set(["EXPERIMENTING", "REPORTING", "EXAMINING", "EVALUATING", "COMPLETED"]);
@@ -189,6 +190,7 @@ export async function reviewReport(reportId: string, teacherId: string, decision
   if (decision === "feedback" && !feedback.trim()) throw new Error("수정할 내용을 입력해 주세요.");
   const db = await getDb();
   const client = await db.connect();
+  let actionNoticeId: string | null = null;
   try {
     await client.query("BEGIN");
     const result = await client.query<{ status: string; team_id: string }>(
@@ -206,7 +208,7 @@ export async function reviewReport(reportId: string, teacherId: string, decision
     );
     if (updated.rowCount !== 1) throw new Error("보고서 상태가 방금 변경되었습니다. 화면을 새로고침한 뒤 다시 확인해 주세요.");
     if (decision === "feedback") {
-      await createActionNotice(client, { teacherId, teamId: current.team_id, sourceType: "report", sourceId: reportId, content: feedback });
+      actionNoticeId = await createActionNotice(client, { teacherId, teamId: current.team_id, sourceType: "report", sourceId: reportId, content: feedback });
     } else {
       await resolveActionNotices(client, "report", reportId);
     }
@@ -218,4 +220,5 @@ export async function reviewReport(reportId: string, teacherId: string, decision
     client.release();
   }
   await audit(teacherId, decision === "reviewed" ? "report_reviewed" : "report_feedback", "report", reportId);
+  if (actionNoticeId) await sendPushForNotice(actionNoticeId);
 }

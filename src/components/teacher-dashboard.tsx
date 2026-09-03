@@ -4,6 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import type { IssuedCredential } from "@/lib/roster";
 import type { TeacherDashboardData } from "@/lib/teacher-data";
 import { useToast } from "@/components/toast-provider";
+import { findNextAvailableTeamNumber } from "@/lib/team-number";
 
 type Credential = Omit<IssuedCredential, "classNumber"> & { classNumber?: number };
 
@@ -63,6 +64,13 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
   const visibleArchivedTeams = useMemo(
     () => data.archivedTeams.filter((team) => team.classNumber === classNumber),
     [data.archivedTeams, classNumber],
+  );
+  const nextTeamNumber = useMemo(
+    () => findNextAvailableTeamNumber([
+      ...visibleTeams.map((team) => team.teamNumber),
+      ...visibleArchivedTeams.map((team) => team.teamNumber),
+    ]),
+    [visibleTeams, visibleArchivedTeams],
   );
   const progressTeams = useMemo(
     () => data.teams.filter((team) =>
@@ -339,7 +347,15 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
               <select className="select" id="classFilter" value={classNumber} onChange={(event) => setClassNumber(Number(event.target.value))}>
                 {Array.from({ length: 9 }, (_, index) => index + 1).map((number) => <option key={number} value={number}>{number}반</option>)}
               </select>
-              <button className="button ghost" disabled={busy} onClick={() => teamAction({ action: "create", classNumber, teamNumber: Math.max(0, ...visibleTeams.map((team) => team.teamNumber), ...visibleArchivedTeams.map((team) => team.teamNumber)) + 1 }, "새 팀을 만들었습니다.")}>+ 팀 추가</button>
+              <button
+                className="button ghost"
+                type="button"
+                disabled={busy || nextTeamNumber === null}
+                title={nextTeamNumber === null ? "1조부터 20조까지 모두 사용 중입니다." : undefined}
+                onClick={() => nextTeamNumber !== null && teamAction({ action: "create", classNumber, teamNumber: nextTeamNumber }, "새 팀을 만들었습니다.")}
+              >
+                {nextTeamNumber === null ? "팀 번호 모두 사용" : "+ 팀 추가"}
+              </button>
               <button className="button secondary" type="button" onClick={() => setShowArchived((value) => !value)} aria-expanded={showArchived}>
                 보관 팀 {visibleArchivedTeams.length}개
               </button>

@@ -363,6 +363,19 @@ CREATE TABLE IF NOT EXISTS notice_reads (
   PRIMARY KEY (notice_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
+  last_success_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_class ON users(class_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sequence);
@@ -386,6 +399,7 @@ CREATE INDEX IF NOT EXISTS idx_notices_status_created ON notices(status, created
 CREATE INDEX IF NOT EXISTS idx_notices_audience ON notices(audience_type, class_id, team_id);
 CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source_type, source_id, resolved_at);
 CREATE INDEX IF NOT EXISTS idx_notice_reads_user ON notice_reads(user_id, read_at);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id, updated_at DESC);
 
 INSERT INTO reports (id, session_id)
 SELECT 'report_' || id, id FROM inquiry_sessions

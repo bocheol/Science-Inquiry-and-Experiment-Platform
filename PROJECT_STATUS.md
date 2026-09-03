@@ -32,14 +32,15 @@
 - 공개 주소: `https://science-inquiry-platform-974188506094.asia-northeast3.run.app`
 - Google Cloud 프로젝트: `chemistry-tutor-493405`
 - 리전: `asia-northeast3` (서울)
-- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00017-r2j` (`Ready=True`, 트래픽 100%)
+- Cloud Run 최근 확인 리비전: `science-inquiry-platform-00020-7sw` (`Ready=True`, 트래픽 100%)
 - Cloud SQL 인스턴스: `science-platform-db`
 - 데이터베이스: `science_platform`
 - PostgreSQL 16, 삭제 보호 활성화
 - 자동 백업 보존: 180일
 - Cloud Run은 공개 접속이지만 학생·교사 기능은 앱 로그인과 역할 검사로 보호한다.
 - 최종 상태 확인 당시 `/api/health` 정상, 비로그인 교사 API는 403이었다.
-- 준비물 모바일 링크 처리, 문서 이력·복원, 자기평가·동료평가, 교사용 공식 도움말까지 위 공개 리비전에 배포했다.
+- 준비물 모바일 링크 처리, 문서 이력·복원, 자기평가·동료평가, 교사용 공식 도움말과 웹 푸시 알림까지 위 공개 리비전에 배포했다.
+- 웹 푸시 고정 VAPID 공개 키·개인 키는 각각 별도 Secret Manager 항목으로 보관하고 Cloud Run 서비스 계정에 해당 비밀값만 읽는 권한을 부여했다. 키 값은 소스·문서·로그에 남기지 않았다.
 
 ## 계정 및 실제 데이터 상태
 
@@ -209,6 +210,12 @@
 - 계획서·보고서 수정 요청 시 교사 피드백 문구를 알림으로 보존하고 해당 작성 탭으로 바로 이동
 - 공지를 읽은 상태와 수정 요청을 처리한 상태를 분리하며, 해당 문서를 다시 제출하면 처리 필요 상태 자동 해제
 - 학생 식별정보·비밀번호로 보이는 교사 공지 입력을 서버에서 차단하고 학생·교사 역할별 API 접근 분리
+- 학생이 공지·알림함에서 기기별 웹 푸시 알림을 직접 허용·해제하고, 기존 구독 기기는 로그인 계정이 바뀌면 현재 학생에게 안전하게 재연결
+- 알림 권한 거절 뒤 로그아웃·재로그인해도 `알림 다시 켜기` 버튼을 표시하고, 기기 설정 안내와 앱 복귀 시 최신 권한 재확인을 제공
+- 교사가 공지 작성·수정 시 푸시 발송 여부를 선택하고 대상 구독 기기 수·성공·실패 결과를 확인
+- 계획서·보고서 수정 요청은 해당 팀의 구독 기기에 중요 푸시로 자동 안내
+- 잠금 화면 푸시에는 공지 본문·학생 정보를 넣지 않고 앱 내 공지·알림함 또는 처리 화면으로만 연결
+- iOS·iPadOS는 홈 화면에 설치한 웹 앱에서만 푸시 허용을 안내하며, 만료된 구독은 전송 결과에 따라 자동 정리
 
 ### 운영·배포
 
@@ -275,9 +282,10 @@
 
 ## 다음 운영 순서
 
-1. 다음 수업 뒤 `openai_usage` 구조화 로그에서 기능별 호출·토큰·웹 검색 횟수·지연을 집계하고 Luna 대화 품질과 Terra 탐구 방향 품질을 교사가 표본 확인한다.
-2. 교사가 현재 사용하는 본인 계정으로 도움말·평가 화면을 1회 확인한다. 비밀번호 추측이나 초기화는 하지 않는다.
-3. 운영 중 발견되는 개선 요청은 학생 자료를 복제하지 않은 재현 환경에서 처리한다.
+1. 체험 학생 계정의 설치형 앱에서 푸시 허용·공지 수신·알림 클릭 이동·해제를 확인하고, 운영 학생이나 Google Sheet에는 시험 데이터를 남기지 않는다.
+2. 다음 수업 뒤 `openai_usage` 구조화 로그에서 기능별 호출·토큰·웹 검색 횟수·지연을 집계하고 Luna 대화 품질과 Terra 탐구 방향 품질을 교사가 표본 확인한다.
+3. 교사가 현재 사용하는 본인 계정으로 도움말·평가 화면을 1회 확인한다. 비밀번호 추측이나 초기화는 하지 않는다.
+4. 운영 중 발견되는 개선 요청은 학생 자료를 복제하지 않은 재현 환경에서 처리한다.
 
 ## 현재 수업 운영 흐름
 
@@ -405,6 +413,20 @@
 - 위 모델 라우팅 변경은 공지 핫픽스와 함께 Cloud Run 리비전 `science-inquiry-platform-00016-5wk`에 빌드되었다. 리비전 `Ready=True`, 트래픽 100%, `/api/health`와 로그인 화면 200, 비로그인 팀 대화·탐구 방향 API 403, 심각도 `ERROR` 이상 로그 0건을 다시 확인했다.
 - 두 작업의 최종 소스를 다시 검증한 뒤 Cloud Run 리비전 `science-inquiry-platform-00017-r2j`로 명시적으로 배포했다. 전체 18개 파일 48개 테스트, TypeScript 타입 검사, 프로덕션 빌드가 통과했고 리비전 `Ready=True`, 트래픽 100%, `/api/health`와 로그인 화면 200, 비로그인 팀 대화·탐구 방향 API 403, 새 리비전의 심각도 `ERROR` 이상 로그 0건을 확인했다.
 - 2026-09-03 결제 반영 후 학생 데이터 없는 최소 요청으로 `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`을 확인했다. 세 요청 모두 지정한 실제 모델로 `completed` 응답을 반환했으며 기존 키 값은 출력하거나 변경하지 않았다.
+- 2026-09-03 학생 기기별 Web Push 구독·해제, 계정 변경 시 구독 재연결, 전체·반·팀 대상 격리, 만료 구독 자동 제거, 공지·수정 요청 푸시 연결을 구현했다. 잠금 화면 페이로드에는 공지 본문·제목·학생 식별정보를 넣지 않는다.
+- 푸시 기능 추가 후 TypeScript 타입 검사, Vitest 18개 파일 50개 테스트, Next.js 16.3.2 프로덕션 빌드를 통과했다.
+- 로컬 학생 공지 화면에서 푸시 미설정 안내와 개인정보 보호 문구를 확인하고, 390×844 화면에서 가로 넘침 없음, 서비스 워커 HTTP 200·보안/무캐시 헤더, 비로그인 구독 API 403을 확인했다. 실제 푸시 수신은 운영 VAPID 설정·배포 후 체험 계정 기기에서 확인해야 한다.
+- 고정 VAPID 키 쌍을 생성해 `science-platform-vapid-public`, `science-platform-vapid-private` Secret Manager 항목의 버전 1로 저장하고, Cloud Run 서비스 계정에 두 비밀값의 `secretAccessor` 권한만 추가했다. 키 값은 출력하거나 로컬 파일에 저장하지 않았다.
+- 푸시 기능 소스를 Cloud Run 리비전 `science-inquiry-platform-00018-lvx`로 배포하고 `Ready=True`, 트래픽 100%를 확인했다. VAPID 공개 키·개인 키는 Secret Manager 버전 1, 연락 주체는 일반 환경값으로 연결되었다.
+- 새 리비전의 `/api/health`, 로그인, manifest, 서비스 워커는 HTTP 200이었다. 서비스 워커는 JavaScript 콘텐츠 유형·`no-store`·동일 출처 CSP 헤더를 반환했고, 비로그인 푸시 구독·교사 공지 API는 403이었다. 새 리비전의 최근 심각도 `ERROR` 이상 로그는 0건이었다.
+- 배포 후 기존 데이터베이스·세션·교사 초기 계정·OpenAI 비밀값 4개와 새 VAPID 비밀값 2개, Cloud SQL·학년도·Google Sheets 일반 환경 설정이 모두 보존된 것을 값 노출 없이 확인했다.
+- 2026-09-03 알림 권한 거절 상태에서도 재로그인 뒤 `알림 다시 켜기` 버튼을 유지하고, 기기 설정 안내와 앱 복귀 시 권한 재확인을 추가했다. 앱은 브라우저·기기가 차단한 시스템 권한 창을 강제로 다시 열지 않는다.
+- 재승인 흐름 테스트를 포함해 Vitest 19개 파일 54개 테스트, TypeScript 타입 검사, Next.js 16.3.2 프로덕션 빌드를 통과했다. 로컬 390×844 공지 화면에서 가로 넘침과 브라우저 오류가 없음을 확인했다.
+- 개선 소스를 Cloud Run 리비전 `science-inquiry-platform-00019-xc6`로 배포하고 `Ready=True`, 트래픽 100%를 확인했다. `/api/health`, 로그인, manifest, 서비스 워커는 HTTP 200, 비로그인 푸시 구독·교사 공지 API는 403, 새 리비전의 심각도 `ERROR` 이상 로그는 0건이었다. 기존 비밀 연결 6개와 일반 환경 설정 9개도 값 노출 없이 보존을 확인했다.
+- 2026-09-03 9반의 `교사용 체험팀` 특수 번호가 일반 팀의 다음 번호 계산에 포함되어 팀 생성 요청이 서버 검증에서 거절되던 문제를 수정했다. 일반 팀은 활성·보관 팀의 1~20번 중 비어 있는 첫 번호를 사용하고, 모두 사용 중이면 추가 버튼을 비활성화한다. 기존 팀·학생 자료는 변경하지 않았다.
+- 팀 번호 계산 테스트를 포함해 Vitest 20개 파일 58개 테스트, TypeScript 타입 검사, Next.js 16.3.2 프로덕션 빌드를 통과했다. 운영 교사 화면에서 9반의 `+ 팀 추가` 버튼이 활성 상태임을 읽기 전용으로 확인했으며 실제 팀 생성은 실행하지 않았다.
+- 수정본을 Cloud Run 리비전 `science-inquiry-platform-00020-7sw`로 배포하고 트래픽 100%를 확인했다. `/api/health`, 로그인, manifest, 서비스 워커는 HTTP 200, 비로그인 팀 생성 API는 403, 새 리비전의 심각도 `ERROR` 이상 로그는 0건이었다. 기존 비밀 연결 6개와 일반 환경 설정 9개도 값 노출 없이 보존했다.
+- 배포 업로드에서 실제 자격정보를 생성·취급하는 교사 계정 생성 스크립트를 제외하도록 `.gcloudignore`를 강화했다.
 
 ## 개인정보·보안 주의사항
 
@@ -428,6 +450,7 @@
 - 교사 진척 화면: `src/components/teacher-dashboard.tsx`
 - 학생 계정 관리: `src/lib/student-management.ts`, `src/app/api/teacher/students/route.ts`
 - 공지·알림 서비스와 화면: `src/lib/notices.ts`, `src/components/notice-center.tsx`, `src/components/teacher-notice-manager.tsx`
+- 웹 푸시: `src/lib/push-notifications.ts`, `src/lib/push-client.ts`, `src/components/push-notification-manager.tsx`, `src/app/api/push-subscriptions/route.ts`, `public/sw.js`
 - 내보내기 API: `src/app/api/teacher/progress-export/route.ts`
 - 시험 출제·공정성 서비스: `src/lib/exam-service.ts`, `src/lib/exam-ai.ts`
 - 시험 PDF: `src/lib/exam-pdf.ts`, `src/app/api/teacher/exams/pdf/route.ts`

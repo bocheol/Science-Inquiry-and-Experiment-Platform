@@ -15,4 +15,18 @@ describe("official platform guide", () => {
     expect(result.answer).toContain("조회하거나 외부 AI에 전달하지 않으며");
     expect(result.answer).not.toContain("특정 학생");
   });
+
+  it("explains device push privacy and iOS installation requirements", () => {
+    const result = answerPlatformGuideQuestion("아이패드에서 푸시 기기 알림을 어떻게 켜나요?");
+    expect(result.sources).toContain("공지·알림함");
+    expect(result.answer).toContain("홈 화면에 추가");
+    expect(result.answer).toContain("학생 정보가 표시되지 않습니다");
+  });
+
+  it("explains how to retry after notification permission was denied", () => {
+    const result = answerPlatformGuideQuestion("기기 알림을 거절했는데 다시 켜기는 어떻게 하나요?");
+    expect(result.sources).toContain("공지·알림함");
+    expect(result.answer).toContain("알림 다시 켜기");
+    expect(result.answer).toContain("강제로 다시 열 수 없습니다");
+  });
 });

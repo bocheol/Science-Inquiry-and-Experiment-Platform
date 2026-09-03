@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { PushNotificationManager } from "@/components/push-notification-manager";
 import { useToast } from "@/components/toast-provider";
 import type { NoticeFeed, NoticeItem } from "@/lib/notices";
 
@@ -109,6 +110,7 @@ export function NoticeCenter({ initialFeed }: { initialFeed: NoticeFeed }) {
 
   return (
     <div className="stack notice-center">
+      <PushNotificationManager />
       <section className="notice-summary-grid">
         <button className={`summary-card ${filter === "unread" ? "selected" : ""}`} type="button" onClick={() => setFilter("unread")}><span>읽지 않은 공지</span><strong>{feed.unreadCount}</strong></button>
         <button className={`summary-card ${filter === "action" ? "selected" : ""}`} type="button" onClick={() => setFilter("action")}><span>처리 필요</span><strong>{feed.actionRequiredCount}</strong></button>

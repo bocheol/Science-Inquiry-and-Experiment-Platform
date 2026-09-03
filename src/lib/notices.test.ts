@@ -10,6 +10,11 @@ import {
 } from "@/lib/notices";
 import { reviewPlan, submitPlan } from "@/lib/plan-service";
 import { reviewReport } from "@/lib/report-service";
+import {
+  removePushSubscription,
+  savePushSubscription,
+  sendPushForNotice,
+} from "@/lib/push-notifications";
 import type { SessionUser } from "@/lib/types";
 
 const teacher: SessionUser = {
@@ -92,5 +97,49 @@ describe("notice and notification mailbox", () => {
     const reportNotice = (await listStudentNotices(teamStudent)).notices.find((notice) => notice.title === "팀 최종보고서 수정 요청");
     expect(reportNotice).toMatchObject({ isResolved: false, actionPath: "/inquiry#report" });
     expect(reportNotice?.content).toContain("결과와 결론");
+  });
+
+  it("targets only eligible subscribed devices, rebinds shared browsers, and removes expired subscriptions", async () => {
+    const db = await getDb();
+    await db.query(
+      `INSERT INTO users
+        (id, name, login_id, academic_year, role, class_id, password_hash, must_change_password)
+       VALUES ('push_other_student', '푸시다른반학생', '10896', 2026, 'student', 'class_2026_8', 'unused', FALSE)`,
+    );
+    const otherStudent: SessionUser = {
+      id: "push_other_student", name: "푸시다른반학생", loginId: "10896", role: "student",
+      academicYear: 2026, classId: "class_2026_8", classNumber: 8, mustChangePassword: false,
+    };
+    const teamEndpoint = "https://push.example/team-device";
+    const otherEndpoint = "https://push.example/other-device";
+    const keys = { p256dh: "p".repeat(80), auth: "a".repeat(24) };
+    await savePushSubscription(teamStudent, { endpoint: teamEndpoint, keys }, "test browser");
+    await savePushSubscription(otherStudent, { endpoint: otherEndpoint, keys }, "test browser");
+
+    const classNoticeId = await createAnnouncement(teacher, {
+      title: "9반 푸시 안내", content: "잠금 화면에는 보이면 안 되는 상세 내용", audienceType: "class", classNumber: 9, priority: "normal",
+    });
+    const deliveries: Array<{ endpoint: string; payload: string }> = [];
+    const classSummary = await sendPushForNotice(classNoticeId, async (subscription, payload) => {
+      deliveries.push({ endpoint: subscription.endpoint, payload });
+    });
+    expect(classSummary).toMatchObject({ targeted: 1, sent: 1, failed: 0 });
+    expect(deliveries.map((item) => item.endpoint)).toEqual([teamEndpoint]);
+    expect(deliveries[0]?.payload).not.toContain("상세 내용");
+    expect(deliveries[0]?.payload).not.toContain("9반 푸시 안내");
+
+    await savePushSubscription(otherStudent, { endpoint: teamEndpoint, keys }, "shared browser rebound");
+    expect(await sendPushForNotice(classNoticeId, async () => undefined)).toMatchObject({ targeted: 0, sent: 0 });
+
+    await savePushSubscription(teamStudent, { endpoint: teamEndpoint, keys }, "test browser");
+    const teamNoticeId = await createAnnouncement(teacher, {
+      title: "팀 푸시 안내", content: "팀원만 확인합니다.", audienceType: "team", teamId: "demo_team_1", priority: "important",
+    });
+    const expiredSummary = await sendPushForNotice(teamNoticeId, async () => {
+      throw { statusCode: 410 };
+    });
+    expect(expiredSummary).toMatchObject({ targeted: 1, sent: 0, expired: 1, failed: 0 });
+    expect(await sendPushForNotice(teamNoticeId, async () => undefined)).toMatchObject({ targeted: 0 });
+    await removePushSubscription(otherStudent, otherEndpoint);
   });
 });

@@ -334,14 +334,16 @@ export async function createActionNotice(
   const team = await db.query<{ class_id: string }>("SELECT class_id FROM teams WHERE id = $1", [input.teamId]);
   if (!team.rows[0]) throw new Error("알림을 보낼 팀을 찾지 못했습니다.");
   const label = input.sourceType === "plan" ? "탐구 계획서" : "팀 최종보고서";
+  const noticeId = createId("notice");
   await db.query(
     `INSERT INTO notices
       (id, kind, author_id, title, content, audience_type, class_id, team_id, priority,
        source_type, source_id, action_path)
      VALUES ($1, 'action_request', $2, $3, $4, 'team', $5, $6, 'important', $7, $8, $9)`,
-    [createId("notice"), input.teacherId, `${label} 수정 요청`, input.content.trim(), team.rows[0].class_id,
+    [noticeId, input.teacherId, `${label} 수정 요청`, input.content.trim(), team.rows[0].class_id,
       input.teamId, input.sourceType, input.sourceId, `/inquiry#${input.sourceType}`],
   );
+  return noticeId;
 }
 
 export async function resolveActionNotices(db: Queryable, sourceType: "plan" | "report", sourceId: string) {
