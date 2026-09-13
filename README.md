@@ -24,10 +24,8 @@
 3. `pnpm dev`
 4. 브라우저에서 `http://localhost:3000`을 엽니다.
 
-개발 모드에는 확인용 계정이 있습니다.
-
-- 교사: `teacher` / `teacher1234`
-- 학생: `10901` / `student1234`
+개발 확인용 계정은 로컬 초기화 과정에서 생성되는 값을 사용합니다. 실제 수업 계정이나
+운영 비밀번호를 문서·채팅·커밋에 기록하지 않습니다.
 
 개발 모드의 기본 데이터베이스는 메모리용이어서 서버를 재시작하면 초기화됩니다. 실제 수업에는 반드시 PostgreSQL `DATABASE_URL`을 연결해야 하며, 운영 모드는 영구 데이터베이스가 없으면 시작하지 않도록 막혀 있습니다.
 
@@ -38,8 +36,8 @@ Cloud Run에서는 Cloud SQL의 Unix 소켓을 사용합니다. `INSTANCE_UNIX_S
 로컬에서는 서비스 계정 JSON을 프로젝트 루트의 `service-account-google.json`으로 두고 다음을 `.env.local`에 설정합니다.
 
 ```text
-GOOGLE_APPLICATION_CREDENTIALS=C:\Users\user\Desktop\Science qury platfrom\service-account-google.json
-GOOGLE_SPREADSHEET_ID=1Ia5xoZZDv3b4sVq3la8POFNE_QVHEuLhitS-YC_QBVg
+GOOGLE_APPLICATION_CREDENTIALS=/로컬/보안/경로/service-account-google.json
+GOOGLE_SPREADSHEET_ID=실제_스프레드시트_ID
 ```
 
 준비물 시트를 JSON의 `client_email` 주소와 공유하고 편집자 권한을 부여해야 합니다. JSON은 Git과 Docker 이미지에서 제외됩니다. Cloud Run에서는 키 파일 대신 실행 서비스 계정에 시트 편집 권한을 부여합니다.
@@ -49,6 +47,8 @@ GOOGLE_SPREADSHEET_ID=1Ia5xoZZDv3b4sVq3la8POFNE_QVHEuLhitS-YC_QBVg
 `OPENAI_API_KEY`는 브라우저 코드에 포함되지 않고 서버에서만 사용합니다. 팀 ID는 해시된 안전 식별자로 보내며, AI 프롬프트에는 실명과 학번 대신 `팀원 A` 같은 가명만 전달합니다. API 키가 있어도 별도의 API 결제/사용 한도가 준비되어야 합니다. ChatGPT 구독과 API 결제는 별개입니다.
 
 기능별 기본 모델은 일반 팀 대화 `gpt-5.6-luna`, 출처 검색이 필요한 팀 대화와 탐구 방향 제안 `gpt-5.6-terra`, 시험 문항 생성 `gpt-5.6-sol`입니다. 팀 대화의 웹 검색은 학생이 출처·논문·최신 자료 등을 명시적으로 요청한 경우에만 활성화됩니다. 모든 호출은 `low` reasoning effort를 사용하며, 운영 로그에는 학생 내용이나 팀 식별자 없이 기능·모델·토큰·웹 검색 호출 수만 기록합니다. 필요하면 `.env.local` 또는 Cloud Run 환경변수의 `OPENAI_TEAM_CHAT_MODEL`, `OPENAI_TEAM_RESEARCH_MODEL`, `OPENAI_TOPIC_MODEL`, `OPENAI_EXAM_MODEL`로 각각 덮어쓸 수 있습니다.
+
+실험 Live AI는 공식 저비용 음성 모델 `gpt-realtime-2.1-mini`, 대면 메모 녹음 전사와 Live 자막은 `gpt-transcribe`를 기본으로 사용합니다. 각각 `OPENAI_LIVE_AI_MODEL`, `OPENAI_LIVE_TRANSCRIPTION_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`로 덮어쓸 수 있습니다. Live AI에는 팀 공개 계획서·보고서·교사 피드백·공동 활동 정리만 보내며 개인 일지는 보내지 않습니다. 브라우저에는 60초짜리 Realtime 임시 키만 전달하고 서버의 `OPENAI_API_KEY`는 전달하지 않습니다.
 
 ## 운영 전 필수값
 

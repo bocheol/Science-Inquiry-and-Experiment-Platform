@@ -19,7 +19,7 @@ try {
   for (const kind of ["plan", "report"]) {
     const doc = kind === "plan" ? "demo_plan_1" : "report_demo_session_1";
     for (const n of [1, 2]) await db.query("INSERT INTO document_revisions(id,document_type,document_id,cycle_id,snapshot,action,changed_by,created_at) VALUES($1,$2,$3,$4,$5,'field:purpose','demo_student_1',$6) ON CONFLICT(id) DO NOTHING", [
-      "browser_" + kind + "_" + n, kind, doc, cycle, { formData: { purpose: "합성 목적 " + n, method: n === 1 ? "관찰 👨‍👩‍👧‍👦" : "관찰 👩‍🔬" }, roles: [], reviewStatus: "draft", status: "draft" }, "2026-09-0" + n + "T00:00:00Z"
+      "browser_" + kind + "_" + n, kind, doc, cycle, { formData: { purpose: "합성 목적 " + n, method: n === 1 ? "관찰 👨‍👩‍👧‍👦" : "관찰 👩‍🔬", ...(n === 2 ? { addedOnly: "두 번째 문서에 추가된 합성 항목" } : {}) }, roles: [], reviewStatus: "draft", status: "draft" }, "2026-09-0" + n + "T00:00:00Z"
     ]);
     await db.query("INSERT INTO document_revisions(id,document_type,document_id,cycle_id,snapshot,action,changed_by) VALUES($1,$2,$3,'browser_past',$4,'cycle_completed','demo_student_1') ON CONFLICT(id) DO NOTHING", ["browser_final_" + kind, kind, doc, { formData: { purpose: "완료 회차 보존 목적" }, roles: [] }]);
   }
@@ -38,7 +38,14 @@ try {
     await modal.getByLabel("기준 A").selectOption("revision:browser_" + kind + "_1");
     await modal.getByLabel("비교 B").selectOption("revision:browser_" + kind + "_2");
     await modal.locator(".version-result").waitFor();
-    await modal.locator(".version-field").first().waitFor();
+    await modal.locator(".version-document-row").first().waitFor();
+    assert.equal(await modal.getByRole("button", { name: "전체 문서", exact: true }).getAttribute("aria-pressed"), "true");
+    assert.ok((await modal.locator(".version-document-row").count()) > 1);
+    assert.ok((await modal.locator(".version-empty").count()) > 0);
+    assert.ok((await modal.locator(".version-document-row").evaluateAll(rows => rows.every(row => {
+      const cells = [...row.children].map(cell => cell.getBoundingClientRect());
+      return cells.length === 2 && cells[0].top === cells[1].top && cells[0].height === cells[1].height;
+    }))));
     assert.ok(await modal.locator("ins").count() > 0);
     assert.ok(await modal.locator("del").count() > 0);
     assert.equal(await modal.getByRole("button", { name: "이 상태로 복원", exact: true }).count(), 0);
@@ -63,6 +70,14 @@ try {
     for (const width of [320, 768]) {
       await page.setViewportSize({ width, height: 800 });
       assert.ok(await modal.evaluate(el => el.scrollWidth <= el.clientWidth));
+      const comparisonPanel = modal.locator(".version-document-scroll");
+      const size = await comparisonPanel.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      if (width === 320) assert.ok(size.scroll > size.client);
+      else assert.ok(size.scroll <= size.client);
+      assert.ok(await modal.locator(".version-document-row").evaluateAll(rows => rows.every(row => {
+        const cells = [...row.children].map(cell => cell.getBoundingClientRect());
+        return cells.length === 2 && cells[0].top === cells[1].top && cells[0].height === cells[1].height;
+      })));
     }
     await page.keyboard.press("Escape");
     await modal.waitFor({ state: "detached" });

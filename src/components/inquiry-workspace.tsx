@@ -16,8 +16,9 @@ import { ClubCustomTabPanel } from "@/components/club-custom-tab-panel";
 import { CycleAnalysisPanel } from "@/components/cycle-analysis-panel";
 import { ReadOnlyCycleDocument } from "@/components/read-only-cycle-document";
 import { PastRecordsPanel } from "@/components/past-records-panel";
+import { LiveAiPanel } from "@/components/live-ai-panel";
 
-type Tab = "chat" | "records" | "plan" | "materials" | "journal" | "report" | "exam" | "evaluation" | `custom:${string}`;
+type Tab = "chat" | "records" | "live" | "plan" | "materials" | "journal" | "report" | "exam" | "evaluation" | `custom:${string}`;
 
 export function InquiryWorkspace({ initialData, currentUserId }: { initialData: InquiryData; currentUserId: string }) {
   const [data, setData] = useState(initialData);
@@ -36,6 +37,10 @@ export function InquiryWorkspace({ initialData, currentUserId }: { initialData: 
     }
     if (nextTab === "journal") {
       showToast(stageAccess.journalLockedMessage ?? "실험 일지를 열 수 없습니다.", "info");
+      return;
+    }
+    if (nextTab === "live") {
+      showToast(stageAccess.journalLockedMessage ?? "계획 승인과 실험 준비가 끝난 현재 회차에서 Live AI를 사용할 수 있습니다.", "info");
       return;
     }
     showToast(stageAccess.reportLockedMessage ?? "팀 보고서를 열 수 없습니다.", "info");
@@ -81,6 +86,7 @@ export function InquiryWorkspace({ initialData, currentUserId }: { initialData: 
         <a className="tab notice-tab-link" href="/notices">📢 공지·일정</a>
         <button className={`tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>💬 이론 탐구</button>
         <button className={`tab ${tab === "records" ? "active" : ""}`} onClick={() => setTab("records")}>🗨 대화·활동 기록</button>
+        <button className={`tab ${tab === "live" ? "active" : ""}`} onClick={() => openStudentTab("live", !cycleReadOnly && journalAvailable)} data-locked={cycleReadOnly || !journalAvailable || undefined} aria-label={!cycleReadOnly && journalAvailable ? "실험 Live AI" : "실험 Live AI, 잠김"}>🎙 실험 Live AI</button>
         <button className={`tab ${tab === "plan" ? "active" : ""}`} onClick={() => setTab("plan")}>📝 탐구 계획</button>
         {!data.team.clubId || data.clubFeatures.materials ? <button className={`tab ${tab === "materials" ? "active" : ""}`} onClick={() => setTab("materials")}>🧪 준비물 신청</button> : null}
         <button className={`tab ${tab === "journal" ? "active" : ""}`} onClick={() => openStudentTab("journal", cycleReadOnly || journalAvailable)} data-locked={!cycleReadOnly && !journalAvailable || undefined} aria-label={cycleReadOnly || journalAvailable ? "실험 일지" : "실험 일지, 잠김, 눌러서 필요한 조건 확인"} title={cycleReadOnly || journalAvailable ? "" : "필요한 조건을 안내받으려면 누르세요"}>📋 실험 일지</button>
@@ -91,6 +97,7 @@ export function InquiryWorkspace({ initialData, currentUserId }: { initialData: 
       </nav>
       <div className="card workspace-panel">
         <div hidden={tab !== "records"}><DiscussionPanel key={data.session.cycle?.id ?? "uncategorized"} sessionId={data.session.id} cycleId={data.session.cycle?.id} currentUserId={currentUserId} members={data.members} readOnly={data.session.cycle?.status === "completed"} active={tab === "records"} /></div>
+        {tab === "live" ? <LiveAiPanel sessionId={data.session.id} cycleId={data.session.cycle?.id} available={!cycleReadOnly && journalAvailable} /> : null}
         {tab === "chat" ? <ChatPanel key={`${currentUserId}:${data.session.cycle?.id}`} data={data} currentUserId={currentUserId} onRefresh={refresh} /> : null}
         {tab === "plan" || openedEditors.plan ? <div hidden={tab !== "plan"}>{cycleReadOnly ? <ReadOnlyCycleDocument scope={{ documentType: "plan", documentId: data.plan.id, cycleId: data.session.cycle!.id }} title="팀 탐구 계획서" description={data.plan.description} fields={data.plan.fields} formData={data.plan.formData} /> : <PlanEditor key={`${currentUserId}:${data.plan.id}:${data.session.cycle?.id ?? "none"}:${data.plan.configVersionId ?? "default"}`} data={data} currentUserId={currentUserId} onRefresh={refresh} />}</div> : null}
         {tab === "materials" ? cycleReadOnly ? <div className="notice-box">완료된 회차의 준비물 신청은 위의 탐구 회차 기록에 고정되어 있습니다.</div> : <MaterialForm key={data.session.cycle?.id ?? data.session.id} data={data} currentUserId={currentUserId} onRefresh={refresh} /> : null}
