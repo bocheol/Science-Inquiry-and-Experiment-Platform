@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useToast } from "@/components/toast-provider";
 import { DocumentVersionButton } from "@/components/document-version-comparison";
-import type { DocumentScope } from "@/lib/document-version-types";
+import { versionTime, type DocumentScope } from "@/lib/document-version-types";
 
 type HistoryItem = { id: string; action: string; actorName: string; createdAt: string };
 
@@ -41,7 +41,7 @@ export function DocumentHistoryPanel({
   const [error, setError] = useState("");
 
   async function restore(item: HistoryItem) {
-    if (!window.confirm(`${new Date(item.createdAt).toLocaleString("ko-KR")}에 기록된 ${actionLabel(item.action)}로 복원할까요? 기록 작업자: ${item.actorName}. 복원 직전 상태도 이력에 남습니다.`)) return;
+    if (!window.confirm(`${versionTime(item.createdAt)}(한국 시간)에 기록된 ${actionLabel(item.action)}로 복원할까요? 기록 작업자: ${item.actorName}. 복원 직전 상태도 이력에 남습니다.`)) return;
     setBusyId(item.id);
     setError("");
     try { await onRestore(item.id); }
@@ -60,7 +60,7 @@ export function DocumentHistoryPanel({
     {error ? <div className="error-box" role="alert">{error}</div> : null}
     <div className="history-list">
       {history.map((item) => <div className="history-item" key={item.id}>
-        <div><strong>{actionLabel(item.action)}</strong><span>{item.actorName} · {new Date(item.createdAt).toLocaleString("ko-KR")}</span></div>
+        <div><strong>{actionLabel(item.action)}</strong><span>{item.actorName} · {versionTime(item.createdAt)} (한국 시간)</span></div>
         <DocumentVersionButton scope={scope} initialRevisionId={item.id}>이 기록 비교</DocumentVersionButton>
         {canRestore ? <button className="button ghost" disabled={Boolean(busyId)} onClick={() => void restore(item)}>{busyId === item.id ? "복원 중…" : "이 상태로 복원"}</button> : null}
       </div>)}

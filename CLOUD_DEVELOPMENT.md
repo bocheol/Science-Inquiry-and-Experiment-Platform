@@ -56,6 +56,8 @@ codex -m gpt-6-astra -c 'model_reasoning_effort="high"'
 
 ## 다시 열었을 때
 
+- 미리보기 서버가 응답하지 않으면 먼저 기존 실행 터미널과 3000번 포트를 확인한다. 서버가 종료된 경우 `/workspaces/science-inquiry`에서 `node scripts/cloud-dev.mjs dev`로 실행할 수 있다. 이는 `pnpm dev`와 같은 개발 실행기이며 운영 연결 차단을 유지한다. 다른 경로에서 패키지 전체 재설치 안내가 나타나면 바로 승인하지 말고 기존 작업 폴더를 확인한다.
+
 - 작업실 열기 → `pnpm cloud:status` → `pnpm dev`.
 - 새 설정을 받은 경우 **Codespaces: Rebuild Container**로 설치 구성을 갱신한다.
 - 개발 미리보기는 작업실과 개발 서버가 실행되는 동안 사용할 수 있다. 상시 운영 주소와 구분한다.
