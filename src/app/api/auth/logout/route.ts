@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { clearSession } from "@/lib/auth";
 
-export async function POST(request: Request) {
+export async function POST() {
   await clearSession();
-  return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  // Keep the browser's origin when the server sits behind a port-forwarding proxy.
+  return new NextResponse(null, { status: 303, headers: { Location: "/login" } });
 }
-
