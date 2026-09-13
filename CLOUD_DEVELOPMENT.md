@@ -40,6 +40,8 @@
 
 로그인 후 프로젝트 폴더에서 다음 명령으로 Astra·High를 선택해 시작한다.
 
+“Codex용 장치 코드 인증을 활성화” 안내가 나오면 [ChatGPT 보안 및 로그인 설정](https://chatgpt.com/#settings/Security)의 아래쪽에서 **Codex용 장치 코드 인증 활성화**를 켠다. 위쪽의 개발자 모드와는 별개다. 설정을 켠 뒤 터미널에서 진행 중인 로그인 명령을 취소하고 `codex login --device-auth`를 다시 실행해 새 코드로 연결한다. 일회용 코드는 해당 공식 인증 페이지에서만 입력하며 문서나 Git에 저장하지 않는다.
+
 ```bash
 codex -m gpt-6-astra -c 'model_reasoning_effort="high"'
 ```
