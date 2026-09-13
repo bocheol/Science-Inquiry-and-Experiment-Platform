@@ -1,0 +1,21 @@
+{
+  "name": "과탐실 개발 작업실",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/science-inquiry",
+  "remoteUser": "node",
+  "shutdownAction": "stopCompose",
+  "hostRequirements": { "cpus": 2, "memory": "8gb", "storage": "32gb" },
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "과탐실 개발 미리보기", "onAutoForward": "notify", "visibility": "private" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+  "postCreateCommand": "pnpm install --frozen-lockfile && pnpm cloud:setup",
+  "waitFor": "postCreateCommand",
+  "customizations": {
+    "vscode": {
+      "settings": { "files.eol": "\n", "terminal.integrated.defaultProfile.linux": "bash" }
+    }
+  }
+}

@@ -135,7 +135,8 @@ try {
         const result = await client.query(
           `UPDATE users
               SET password_hash = $1,
-                  must_change_password = TRUE
+                  must_change_password = TRUE,
+                  session_version = session_version + 1
             WHERE academic_year = $2
               AND status = 'active'
               AND login_id = $3

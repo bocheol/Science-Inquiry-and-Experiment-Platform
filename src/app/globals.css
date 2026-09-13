@@ -580,6 +580,10 @@ a {
 .plan-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 18px; }
 .plan-form { padding: 24px; }
 .plan-side { padding: 18px; height: fit-content; position: sticky; top: 88px; }
+.plan-ai-review { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+.plan-ai-review ul { margin: 8px 0 0; padding-left: 20px; }
+.plan-ai-review li + li { margin-top: 6px; }
+.plan-ai-review p { white-space: pre-wrap; }
 .plan-field { padding: 16px 0; border-bottom: 1px solid var(--line); }
 .plan-field:first-child { padding-top: 0; }
 .plan-field:last-child { border-bottom: 0; }
@@ -796,6 +800,28 @@ a {
   .journal-photo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .journal-read-card dl { grid-template-columns: 1fr; gap: 4px; }
   .journal-read-card dd { margin-bottom: 10px; }
+}
+
+.cycle-analysis-panel { gap: 14px; }
+.cycle-actions { align-items: center; }
+.cycle-history-item { border: 1px solid var(--line); border-radius: 14px; background: white; overflow: hidden; }
+.cycle-history-item > summary { cursor: pointer; padding: 14px 16px; min-height: 48px; overflow-wrap: anywhere; }
+.cycle-history-content { padding: 0 16px 16px; }
+.cycle-analysis-body h4 { margin: 4px 0 8px; }
+.cycle-analysis-body p { white-space: pre-wrap; }
+.cycle-suggestion { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: var(--surface-soft); }
+.decision-readonly { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--brand-soft); }
+.cycle-documents { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.cycle-document { min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfa; }
+.cycle-document > summary { cursor: pointer; padding: 12px 14px; }
+.cycle-document > .stack { padding: 0 12px 12px; }
+.muted-text { color: var(--muted); }
+
+@media (max-width: 520px) {
+  .cycle-history-content { padding: 0 10px 12px; }
+  .cycle-suggestion { padding: 12px; }
+  .cycle-actions .button { width: 100%; }
+  .cycle-documents { grid-template-columns: 1fr; }
 }
 
 @media print {

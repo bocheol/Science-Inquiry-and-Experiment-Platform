@@ -3,6 +3,7 @@ import { ACADEMIC_YEAR } from "@/lib/constants";
 import { audit, getDb } from "@/lib/db";
 import { createId } from "@/lib/id";
 import type { SessionUser } from "@/lib/types";
+import { UserFacingError } from "@/lib/user-facing-error";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -73,11 +74,11 @@ export type AnnouncementInput = {
 };
 
 function assertTeacher(actor: Pick<SessionUser, "role">) {
-  if (actor.role !== "teacher") throw new Error("권한이 없습니다.");
+  if (actor.role !== "teacher") throw new UserFacingError("권한이 없습니다.");
 }
 
 function assertStudent(actor: Pick<SessionUser, "role">) {
-  if (actor.role !== "student") throw new Error("학생만 공지함을 확인할 수 있습니다.");
+  if (actor.role !== "student") throw new UserFacingError("학생만 공지함을 확인할 수 있습니다.");
 }
 
 function dateOnly(value: Date | string | null) {
@@ -118,16 +119,16 @@ function toNotice(row: NoticeRow): NoticeItem {
 function assertSafeAnnouncement(title: string, content: string) {
   const text = `${title}\n${content}`;
   if (/(비밀\s*번호|패스워드|password|api\s*key|secret)/i.test(text) || /(^|\D)1\d{4}(?=\D|$)/.test(text)) {
-    throw new Error("공지에는 학생 학번·비밀번호·비밀값을 입력할 수 없습니다.");
+    throw new UserFacingError("공지에는 학생 학번·비밀번호·비밀값을 입력할 수 없습니다.");
   }
 }
 
 function normalizeCalendarDate(value: string | null | undefined, label: string) {
   if (!value) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`${label}을 확인해 주세요.`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new UserFacingError(`${label}을 확인해 주세요.`);
   const parsed = new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
-    throw new Error(`${label}을 확인해 주세요.`);
+    throw new UserFacingError(`${label}을 확인해 주세요.`);
   }
   return value;
 }
@@ -139,32 +140,33 @@ async function resolveTarget(db: Queryable, input: AnnouncementInput) {
       "SELECT id FROM classes WHERE academic_year = $1 AND class_number = $2",
       [ACADEMIC_YEAR, input.classNumber],
     );
-    if (!result.rows[0]) throw new Error("공지할 학급을 확인해 주세요.");
+    if (!result.rows[0]) throw new UserFacingError("공지할 학급을 확인해 주세요.");
     return { classId: result.rows[0].id, teamId: null };
   }
   const result = await db.query<{ class_id: string }>(
     "SELECT class_id FROM teams WHERE id = $1 AND status = 'active'",
     [input.teamId],
   );
-  if (!result.rows[0]) throw new Error("공지할 활성 팀을 확인해 주세요.");
+  if (!result.rows[0]) throw new UserFacingError("공지할 활성 팀을 확인해 주세요.");
   return { classId: result.rows[0].class_id, teamId: input.teamId! };
 }
 
 function normalizeAnnouncement(input: AnnouncementInput) {
   const title = input.title.trim();
   const content = input.content.trim();
-  if (title.length < 2 || title.length > 120) throw new Error("공지 제목은 2자 이상 120자 이하로 입력해 주세요.");
-  if (content.length < 2 || content.length > 5000) throw new Error("공지 내용은 2자 이상 5000자 이하로 입력해 주세요.");
+  if (title.length < 2 || title.length > 120) throw new UserFacingError("공지 제목은 2자 이상 120자 이하로 입력해 주세요.");
+  if (content.length < 2 || content.length > 5000) throw new UserFacingError("공지 내용은 2자 이상 5000자 이하로 입력해 주세요.");
   assertSafeAnnouncement(title, content);
   const calendarStart = normalizeCalendarDate(input.calendarStart, "일정 시작일");
   const calendarEnd = normalizeCalendarDate(input.calendarEnd, "일정 종료일");
-  if (calendarEnd && !calendarStart) throw new Error("일정 종료일을 사용하려면 시작일도 입력해 주세요.");
-  if (calendarStart && calendarEnd && calendarEnd < calendarStart) throw new Error("일정 종료일은 시작일보다 빠를 수 없습니다.");
+  if (calendarEnd && !calendarStart) throw new UserFacingError("일정 종료일을 사용하려면 시작일도 입력해 주세요.");
+  if (calendarStart && calendarEnd && calendarEnd < calendarStart) throw new UserFacingError("일정 종료일은 시작일보다 빠를 수 없습니다.");
   return { title, content, calendarStart, calendarEnd };
 }
 
 export async function listStudentNotices(actor: SessionUser): Promise<NoticeFeed> {
   assertStudent(actor);
+  if (actor.accountType === "demo") return { notices: [], unreadCount: 0, actionRequiredCount: 0, unreadImportantCount: 0, popupNotice: null };
   const db = await getDb();
   const result = await db.query<NoticeRow>(
     `SELECT DISTINCT n.id, n.kind, author.name AS author_name, n.title, n.content, n.audience_type,
@@ -202,6 +204,7 @@ export async function listStudentNotices(actor: SessionUser): Promise<NoticeFeed
 
 export async function markNoticeRead(actor: SessionUser, noticeId: string) {
   assertStudent(actor);
+  if (actor.accountType === "demo") throw new UserFacingError("체험 학생 계정에는 공식 공지를 제공하지 않습니다.");
   const db = await getDb();
   const accessible = await db.query<{ id: string }>(
     `SELECT n.id FROM notices n
@@ -215,7 +218,7 @@ export async function markNoticeRead(actor: SessionUser, noticeId: string) {
         )`,
     [noticeId, actor.id, actor.classId],
   );
-  if (!accessible.rows[0]) throw new Error("확인할 수 있는 공지를 찾지 못했습니다.");
+  if (!accessible.rows[0]) throw new UserFacingError("확인할 수 있는 공지를 찾지 못했습니다.");
   await db.query(
     `INSERT INTO notice_reads (notice_id, user_id) VALUES ($1, $2)
      ON CONFLICT (notice_id, user_id) DO UPDATE SET read_at = CURRENT_TIMESTAMP`,
@@ -298,7 +301,7 @@ export async function updateAnnouncement(actor: SessionUser, noticeId: string, i
       [normalized.title, normalized.content, input.audienceType, target.classId, target.teamId,
         input.priority, normalized.calendarStart, normalized.calendarEnd, noticeId],
     );
-    if (!updated.rows[0]) throw new Error("수정할 공지를 찾지 못했습니다.");
+    if (!updated.rows[0]) throw new UserFacingError("수정할 공지를 찾지 못했습니다.");
     await client.query("DELETE FROM notice_reads WHERE notice_id = $1", [noticeId]);
     await client.query("COMMIT");
   } catch (error) {
@@ -318,7 +321,7 @@ export async function setAnnouncementArchived(actor: SessionUser, noticeId: stri
       WHERE id = $2 AND kind = 'announcement' RETURNING id`,
     [archived ? "archived" : "active", noticeId],
   );
-  if (!result.rows[0]) throw new Error("변경할 공지를 찾지 못했습니다.");
+  if (!result.rows[0]) throw new UserFacingError("변경할 공지를 찾지 못했습니다.");
   await audit(actor.id, archived ? "notice_archived" : "notice_restored", "notice", noticeId);
 }
 
@@ -332,7 +335,7 @@ export async function createActionNotice(
     [input.sourceType, input.sourceId],
   );
   const team = await db.query<{ class_id: string }>("SELECT class_id FROM teams WHERE id = $1", [input.teamId]);
-  if (!team.rows[0]) throw new Error("알림을 보낼 팀을 찾지 못했습니다.");
+  if (!team.rows[0]) throw new UserFacingError("알림을 보낼 팀을 찾지 못했습니다.");
   const label = input.sourceType === "plan" ? "탐구 계획서" : "팀 최종보고서";
   const noticeId = createId("notice");
   await db.query(

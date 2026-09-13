@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import {
   createTeacherRequest,
@@ -8,6 +9,7 @@ import {
   TEACHER_REQUEST_STATUSES,
   updateTeacherRequestStatus,
 } from "@/lib/teacher-requests";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 const createSchema = z.object({
   category: z.enum(TEACHER_REQUEST_CATEGORIES),
@@ -33,13 +35,13 @@ export async function POST(request: Request) {
   if (!user || user.role !== "teacher" || user.mustChangePassword) {
     return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
   }
-  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  const parsed = createSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "분류·제목·내용을 확인해 주세요." }, { status: 400 });
   try {
     const id = await createTeacherRequest(user, parsed.data);
     return NextResponse.json({ ok: true, id });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "건의·문의를 등록하지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "건의·문의를 등록하지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }
 
@@ -48,12 +50,12 @@ export async function PATCH(request: Request) {
   if (!user || user.role !== "teacher" || user.mustChangePassword) {
     return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
   }
-  const parsed = updateSchema.safeParse(await request.json().catch(() => null));
+  const parsed = updateSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "처리 상태를 확인해 주세요." }, { status: 400 });
   try {
     await updateTeacherRequestStatus(user, parsed.data.requestId, parsed.data.status);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "처리 상태를 변경하지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "처리 상태를 변경하지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }

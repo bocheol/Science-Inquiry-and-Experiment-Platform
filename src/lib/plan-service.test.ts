@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { getDb } from "@/lib/db";
 import { reviewPlan } from "@/lib/plan-service";
+import { ensureInitialCycle } from "@/lib/inquiry-cycles";
 
 const planId = "approval_guard_plan";
 
@@ -12,9 +13,10 @@ beforeAll(async () => {
   await db.query(
     "INSERT INTO inquiry_sessions (id, team_id, stage) VALUES ('approval_guard_session', 'approval_guard_team', 'EXPERIMENTING')",
   );
+  const cycleId = await ensureInitialCycle(db, "approval_guard_session", "teacher_bootstrap");
   await db.query(
-    "INSERT INTO investigation_plans (id, session_id, review_status) VALUES ($1, 'approval_guard_session', 'approved')",
-    [planId],
+    "INSERT INTO investigation_plans (id, session_id, cycle_id, review_status) VALUES ($1, 'approval_guard_session', $2, 'approved')",
+    [planId, cycleId],
   );
 });
 

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { TeacherJournalData } from "@/lib/journal-service";
 
-export function TeacherJournalReview({ teamId }: { teamId: string }) {
+export function TeacherJournalReview({ teamId, cycleId }: { teamId: string; cycleId?: string }) {
   const [data, setData] = useState<TeacherJournalData | null>(null);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [error, setError] = useState("");
@@ -11,15 +11,18 @@ export function TeacherJournalReview({ teamId }: { teamId: string }) {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const response = await fetch(`/api/teacher/journals?teamId=${encodeURIComponent(teamId)}`, { cache: "no-store" });
+      setData(null); setError("");
+      try {
+      const response = await fetch(`/api/teacher/journals?teamId=${encodeURIComponent(teamId)}${cycleId ? `&cycleId=${encodeURIComponent(cycleId)}` : ""}`, { cache: "no-store" });
       const result = (await response.json()) as TeacherJournalData & { message?: string };
       if (cancelled) return;
       if (!response.ok) return setError(result.message ?? "실험 일지를 불러오지 못했습니다.");
       setData(result);
       setSelectedStudentId((current) => current || result.members[0]?.id || "");
+      } catch { if (!cancelled) setError("일지 응답을 확인하지 못했습니다. 다시 열어 주세요."); }
     })();
     return () => { cancelled = true; };
-  }, [teamId]);
+  }, [teamId, cycleId]);
 
   const selected = useMemo(() => data?.members.find((member) => member.id === selectedStudentId) ?? null, [data, selectedStudentId]);
 

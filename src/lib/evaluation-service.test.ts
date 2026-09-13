@@ -61,7 +61,7 @@ describe("v9 self and peer evaluation rules", () => {
       .rejects.toThrow("활동 기회가 없었던 이유");
     responses[0]!.reason = "전입 전 활동이라 참여 기회가 없었습니다.";
     await expect(saveSelfEvaluation(students[0]!, { roundId, responses, reflections: ["실험 설계를 맡았다.", "자료 공유를 더 빨리 하겠다."] }))
-      .resolves.toBeUndefined();
+      .resolves.toEqual({ version: 1 });
   });
 
   it("requires private evidence for low ratings and excludes unable-to-judge from valid counts", async () => {
@@ -97,18 +97,31 @@ describe("v9 self and peer evaluation rules", () => {
     const pending = management.selected!.peerEvaluations.find((evaluation) => evaluation.publicComment);
     expect(pending?.commentReviewStatus).toBe("pending");
     await expect(publishEvaluationRound("teacher_bootstrap", roundId)).rejects.toThrow("검토하지 않은 익명 의견");
-    await reviewPeerComment("teacher_bootstrap", {
+    const reviewed = await reviewPeerComment("teacher_bootstrap", {
       evaluationId: pending!.id,
       status: "approved",
       redactedPublicComment: "측정 자료를 빠르게 공유해 도움이 되었습니다.",
+      expectedVersion: pending!.version,
     });
+    await expect(reviewPeerComment("teacher_bootstrap", {
+      evaluationId: pending!.id,
+      status: "approved",
+      redactedPublicComment: "측정 자료를 빠르게 공유해 도움이 되었습니다.",
+      expectedVersion: pending!.version,
+    })).resolves.toEqual(reviewed);
     for (const studentId of students.slice(1)) {
-      await saveEvaluationTeacherSummary("teacher_bootstrap", { roundId, studentId: studentId!, teacherSummary: "유효 평가가 부족하여 교사가 활동 기록을 종합했습니다." });
+      await saveEvaluationTeacherSummary("teacher_bootstrap", { roundId, studentId: studentId!, teacherSummary: "유효 평가가 부족하여 교사가 활동 기록을 종합했습니다.", expectedVersion: null });
     }
     await publishEvaluationRound("teacher_bootstrap", roundId);
     const result = await getStudentEvaluationData(students[0]!);
     expect(result?.result?.peerAverages.role_commitment).toBe(3.3);
     expect(result?.result?.approvedComments).toEqual(["측정 자료를 빠르게 공유해 도움이 되었습니다."]);
     expect(JSON.stringify(result?.result)).not.toContain(students[1]);
+    await expect(reviewPeerComment("teacher_bootstrap", {
+      evaluationId: pending!.id,
+      status: "hidden",
+      redactedPublicComment: "",
+      expectedVersion: reviewed.version,
+    })).rejects.toThrow("평가 상태가 변경");
   });
 });

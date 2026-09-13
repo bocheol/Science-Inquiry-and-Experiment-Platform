@@ -1,2 +1,4 @@
 minimumReleaseAgeExclude:
   - '@types/node@26.3.0'
+overrides:
+  'next>sharp': '0.35.4'

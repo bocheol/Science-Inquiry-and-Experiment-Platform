@@ -20,3 +20,15 @@ tmp
 .tmp-*
 tsconfig.tsbuildinfo
 *.cookies
+.git
+scripts/
+src/**/*.test.ts
+src/test/
+*.md
+AI_QUALITY_CASES.json
+.agents/
+.codex/
+.devcontainer/
+.github/
+.science-dev/
+work/

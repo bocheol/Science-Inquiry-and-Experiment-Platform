@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import { assignClubStudent, createClub, createClubTeam, enrollClubStudent, getClubManagement, leaveClub } from "@/lib/clubs";
+import { userFacingMessage } from "@/lib/user-facing-error";
 const schema=z.discriminatedUnion("action",[
   z.object({action:z.literal("create"),name:z.string().min(1).max(60)}),
   z.object({action:z.literal("team"),clubId:z.string(),name:z.string().min(1).max(60)}),
@@ -11,7 +13,7 @@ const schema=z.discriminatedUnion("action",[
 export async function GET(){const actor=await getCurrentUser();if(!actor||actor.role!=="teacher"||actor.mustChangePassword)return Response.json({message:"권한이 없습니다."},{status:403});return Response.json(await getClubManagement(actor.id));}
 export async function POST(request:Request){
   const actor=await getCurrentUser();if(!actor||actor.role!=="teacher"||actor.mustChangePassword)return Response.json({message:"권한이 없습니다."},{status:403});
-  const parsed=schema.safeParse(await request.json().catch(()=>null));if(!parsed.success)return Response.json({message:"입력 내용을 확인해 주세요."},{status:400});
+  const parsed=schema.safeParse(await readJsonBody(request));if(!parsed.success)return Response.json({message:"입력 내용을 확인해 주세요."},{status:400});
   const input=parsed.data;
   try{
     if(input.action==='create')await createClub(actor.id,input.name);
@@ -20,5 +22,5 @@ export async function POST(request:Request){
     if(input.action==='assign')await assignClubStudent(actor.id,input.clubId,input.studentId,input.teamId,input.leader);
     if(input.action==='leave')await leaveClub(actor.id,input.clubId,input.studentId);
     return Response.json({ok:true});
-  }catch(error){return Response.json({message:error instanceof Error && !('code' in error)?error.message:"처리하지 못했습니다. 중복된 등록인지 확인해 주세요."},{status:400});}
+  }catch(error){return Response.json({message:userFacingMessage(error,"처리하지 못했습니다. 잠시 후 다시 시도해 주세요.")},{status:400});}
 }

@@ -11,6 +11,7 @@ import {
   saveReportMemberRole,
   submitReport,
 } from "@/lib/report-service";
+import { ensureInitialCycle } from "@/lib/inquiry-cycles";
 
 const teamId = "report_test_team";
 const sessionId = "report_test_session";
@@ -31,8 +32,9 @@ beforeAll(async () => {
     [teamId, ownerId],
   );
   await db.query("INSERT INTO inquiry_sessions (id, team_id, stage, selected_topic) VALUES ($1, $2, 'EXPERIMENTING', '용액 색 변화 탐구')", [sessionId, teamId]);
-  await db.query("INSERT INTO investigation_plans (id, session_id, review_status) VALUES ('report_test_plan', $1, 'approved')", [sessionId]);
-  await db.query("INSERT INTO reports (id, session_id) VALUES ($1, $2)", [reportId, sessionId]);
+  const cycleId = await ensureInitialCycle(db, sessionId, "teacher_bootstrap");
+  await db.query("INSERT INTO investigation_plans (id, session_id, cycle_id, review_status) VALUES ('report_test_plan', $1, $2, 'approved')", [sessionId, cycleId]);
+  await db.query("INSERT INTO reports (id, session_id, cycle_id) VALUES ($1, $2, $3)", [reportId, sessionId, cycleId]);
   await db.query(
     `INSERT INTO team_members (id, team_id, user_id, status) VALUES
       ($1, $2, $3, 'active'), ($4, $2, $5, 'active')`,

@@ -5,7 +5,31 @@ import { studentTextRedactor } from "@/lib/student-privacy";
 import { getDb } from "@/lib/db";
 import { createId } from "@/lib/id";
 import { getAiRuntime, observeOpenAiRequest } from "@/lib/ai-config";
-import { readDiscussionSources, seoulDate, type DiscussionEntry, type SummaryItem } from "@/lib/discussions";
+import { readDiscussionSources, seoulDate, lockDiscussionCycle, type DiscussionEntry, type SummaryItem } from "@/lib/discussions";
+import type { PoolClient } from "pg";
+
+async function lockSummaryCycle(client: PoolClient, sessionId: string, expectedCycleId?: string) {
+  const cycleId = await lockDiscussionCycle(client, sessionId, expectedCycleId);
+  const session = await client.query<{ team_id: string }>("SELECT team_id FROM inquiry_sessions WHERE id = $1", [sessionId]);
+  const team = await client.query<{ status: string }>("SELECT status FROM teams WHERE id = $1 FOR UPDATE", [session.rows[0].team_id]);
+  if (team.rows[0]?.status !== "active") throw new Error("보관된 팀의 기록은 새로 정리하지 않습니다.");
+  return cycleId;
+}
+
+// Backfill only authoritative raw cycle/date ownership; leave legacy summaries intact.
+// Called under the same session/cycle lock as new source writers.
+async function ensureCycleDays(client: PoolClient, sessionId: string, cycleId: string) {
+  if ((await client.query("SELECT cycle_id FROM cycle_discussion_backfills WHERE cycle_id=$1", [cycleId])).rows.length) return;
+  const entries = await client.query<{ activity_date: string; kind: string }>("SELECT activity_date, kind FROM discussion_entries WHERE session_id=$1 AND cycle_id=$2", [sessionId, cycleId]);
+  const messages = await client.query<{ created_at: Date }>("SELECT created_at FROM messages WHERE session_id=$1 AND cycle_id=$2 AND role IN ('user','assistant')", [sessionId, cycleId]);
+  const days = new Map<string, boolean>();
+  for (const row of entries.rows) days.set(row.activity_date, Boolean(days.get(row.activity_date)) || row.kind !== "peer");
+  for (const row of messages.rows) { const date = seoulDate(row.created_at); if (!days.has(date)) days.set(date, false); }
+  for (const [date, immediate] of days) await client.query(
+    "INSERT INTO cycle_discussion_days(session_id,cycle_id,activity_date,immediate_requested) VALUES($1,$2,$3,$4) ON CONFLICT (session_id,cycle_id,activity_date) DO NOTHING", [sessionId, cycleId, date, immediate],
+  );
+  await client.query("INSERT INTO cycle_discussion_backfills(cycle_id) VALUES($1) ON CONFLICT (cycle_id) DO NOTHING", [cycleId]);
+}
 
 const summarySchema = z.object({ items: z.array(z.object({
   category: z.enum(["discussion", "decision", "question", "next", "ai_suggestion", "reported_activity"]),
@@ -48,23 +72,32 @@ async function generate(input: string) {
   return response.output_parsed;
 }
 
-export async function summarizeDiscussionDay(sessionId: string, date: string, generator: SummaryGenerator = generate) {
+export async function summarizeDiscussionDay(sessionId: string, date: string, generator: SummaryGenerator = generate, expectedCycleId?: string) {
   const db = await getDb(); const token = createId("lease");
-  const leased = await db.query<{ requested_version: number }>(
-    `UPDATE discussion_days SET lease_token = $3, lease_until = $4, status = 'processing'
-     WHERE session_id = $1 AND activity_date = $2 AND generated_version < requested_version
-       AND (lease_until IS NULL OR lease_until < $5) AND (retry_after IS NULL OR retry_after < $5)
-     RETURNING requested_version`, [sessionId, date, token, new Date(Date.now()+15*60_000), new Date()]);
-  if (!leased.rows[0]) return false;
-  const version = leased.rows[0].requested_version;
+  let cycleId = "", version = 0, sources: DiscussionEntry[] = [];
+  const claimClient = await db.connect();
   try {
-    const sources = await readDiscussionSources(sessionId, date);
+    await claimClient.query("BEGIN");
+    cycleId = await lockSummaryCycle(claimClient, sessionId, expectedCycleId);
+    await ensureCycleDays(claimClient, sessionId, cycleId);
+    const leased = await claimClient.query<{ requested_version: number }>(
+    `UPDATE cycle_discussion_days SET lease_token = $3, lease_until = $4, status = 'processing'
+     WHERE session_id = $1 AND activity_date = $2 AND cycle_id = $6 AND generated_version < requested_version
+       AND (lease_until IS NULL OR lease_until < $5) AND (retry_after IS NULL OR retry_after < $5)
+     RETURNING requested_version`, [sessionId, date, token, new Date(Date.now()+15*60_000), new Date(), cycleId]);
+    if (!leased.rows[0]) { await claimClient.query("COMMIT"); return false; }
+    version = leased.rows[0].requested_version;
+    sources = await readDiscussionSources(sessionId, date, cycleId, claimClient);
+    await claimClient.query("COMMIT");
+  } catch { await claimClient.query("ROLLBACK"); return false; }
+  finally { claimClient.release(); }
+  try {
     const { records, redact } = await prepareSummaryInput(sources);
     const items: SummaryItem[] = [];
     let chunk: typeof records = []; let size = 0;
     const flush = async () => {
       if (!chunk.length) return;
-      const output = await generator(JSON.stringify({ activityDate: date, records: chunk }));
+      const output = await generator(JSON.stringify({ cycleId, activityDate: date, records: chunk }));
       const parsed = summarySchema.parse(output);
       const allowed = new Set(chunk.map(s => s.id));
       items.push(...validateSummaryItems(parsed.items, sources.filter(s => allowed.has(s.id))).map(item => ({ ...item, text: redact(item.text) })));
@@ -79,15 +112,16 @@ export async function summarizeDiscussionDay(sessionId: string, date: string, ge
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-      const ownership = await client.query("SELECT session_id FROM discussion_days WHERE session_id = $1 AND activity_date = $2 AND lease_token = $3 FOR UPDATE", [sessionId, date, token]);
+      await lockSummaryCycle(client, sessionId, cycleId);
+      const ownership = await client.query("SELECT session_id FROM cycle_discussion_days WHERE session_id = $1 AND activity_date = $2 AND lease_token = $3 AND cycle_id = $4 FOR UPDATE", [sessionId, date, token, cycleId]);
       if (!ownership.rows[0]) { await client.query("ROLLBACK"); return false; }
-      await client.query("INSERT INTO discussion_summaries (id, session_id, activity_date, version, content, sources) VALUES ($1,$2,$3,$4,$5,$6)", [createId("summary"), sessionId, date, version, JSON.stringify(items), JSON.stringify(sources)]);
-      await client.query("UPDATE discussion_days SET generated_version = $3, lease_token = NULL, lease_until = NULL, retry_after = NULL, immediate_requested = CASE WHEN requested_version = $3 THEN FALSE ELSE immediate_requested END, status = CASE WHEN requested_version = $3 THEN 'ready' ELSE 'pending' END WHERE session_id = $1 AND activity_date = $2 AND lease_token = $4", [sessionId, date, version, token]);
+      await client.query("INSERT INTO cycle_discussion_summaries (id, session_id, cycle_id, activity_date, version, content, sources) VALUES ($1,$2,$3,$4,$5,$6,$7)", [createId("summary"), sessionId, cycleId, date, version, JSON.stringify(items), JSON.stringify(sources)]);
+      await client.query("UPDATE cycle_discussion_days SET generated_version = $3, lease_token = NULL, lease_until = NULL, retry_after = NULL, immediate_requested = CASE WHEN requested_version = $3 THEN FALSE ELSE immediate_requested END, status = CASE WHEN requested_version = $3 THEN 'ready' ELSE 'pending' END WHERE session_id = $1 AND activity_date = $2 AND lease_token = $4 AND cycle_id = $5", [sessionId, date, version, token, cycleId]);
       await client.query("COMMIT");
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
     return true;
   } catch (error) {
-    await db.query("UPDATE discussion_days SET status = 'failed', lease_token = NULL, lease_until = NULL, retry_after = $4 WHERE session_id = $1 AND activity_date = $2 AND lease_token = $3", [sessionId, date, token, new Date(Date.now()+5*60_000)]);
+    await db.query("UPDATE cycle_discussion_days SET status = 'failed', lease_token = NULL, lease_until = NULL, retry_after = $4 WHERE session_id = $1 AND activity_date = $2 AND lease_token = $3 AND cycle_id = $5", [sessionId, date, token, new Date(Date.now()+5*60_000), cycleId]);
     console.warn(JSON.stringify({ event: "discussion_summary_failed", category: "generation_or_storage", errorType: error instanceof Error ? error.name : 'unknown' }));
     return false;
   }
@@ -95,12 +129,22 @@ export async function summarizeDiscussionDay(sessionId: string, date: string, ge
 
 export async function runDailySummaries(limit = 2, generator?: SummaryGenerator) {
   const db = await getDb();
-  const jobs = await db.query<{ session_id: string; activity_date: string }>(
-    `SELECT d.session_id, d.activity_date FROM discussion_days d JOIN inquiry_sessions s ON s.id = d.session_id JOIN teams t ON t.id = s.team_id
+  const missing = await db.query<{ id: string; session_id: string }>(
+    "SELECT c.id, c.session_id FROM inquiry_cycles c JOIN inquiry_sessions s ON s.id=c.session_id JOIN teams t ON t.id=s.team_id LEFT JOIN cycle_discussion_backfills b ON b.cycle_id=c.id WHERE c.status='active' AND t.status='active' AND b.cycle_id IS NULL ORDER BY c.id LIMIT 20",
+  );
+  for (const cycle of missing.rows) {
+    const client = await db.connect();
+    try { await client.query("BEGIN"); await lockSummaryCycle(client, cycle.session_id, cycle.id); await ensureCycleDays(client, cycle.session_id, cycle.id); await client.query("COMMIT"); }
+    catch { await client.query("ROLLBACK"); }
+    finally { client.release(); }
+  }
+  const jobs = await db.query<{ session_id: string; activity_date: string; cycle_id: string }>(
+    `SELECT d.session_id, d.activity_date, d.cycle_id FROM cycle_discussion_days d JOIN inquiry_cycles c ON c.id=d.cycle_id JOIN inquiry_sessions s ON s.id = d.session_id JOIN teams t ON t.id = s.team_id
      WHERE d.generated_version < d.requested_version AND (d.activity_date < $1 OR d.immediate_requested = TRUE) AND t.status = 'active'
+       AND c.status = 'active'
        AND (d.lease_until IS NULL OR d.lease_until < $2) AND (d.retry_after IS NULL OR d.retry_after < $2)
      ORDER BY d.activity_date, d.session_id LIMIT $3`, [seoulDate(), new Date(), limit]);
   let completed = 0;
-  for (const job of jobs.rows) if (await summarizeDiscussionDay(job.session_id, job.activity_date, generator)) completed++;
+  for (const job of jobs.rows) if (await summarizeDiscussionDay(job.session_id, job.activity_date, generator, job.cycle_id)) completed++;
   return { attempted: jobs.rows.length, completed };
 }

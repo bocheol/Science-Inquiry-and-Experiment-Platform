@@ -27,6 +27,13 @@ beforeAll(async () => {
 });
 
 describe('class and club separation', () => {
+  it('rejects stale-cycle messages and meeting confirmations without creating records', async () => {
+    await expect(saveDiscussionEntry(student, { id: 'old-cycle-message', sessionId: 'demo_session_1', cycleId: 'previous-cycle', kind: 'peer', content: '이전 화면 초안' })).rejects.toMatchObject({ status: 409 });
+    await expect(confirmMeeting(student, 'demo_session_1', 'old-cycle-meeting', 'previous-cycle')).rejects.toMatchObject({ status: 409 });
+    const db = await getDb();
+    expect((await db.query("SELECT id FROM discussion_entries WHERE id='old-cycle-message'")).rows).toHaveLength(0);
+    expect((await db.query("SELECT entry_id FROM discussion_confirmations WHERE entry_id='old-cycle-meeting'")).rows).toHaveLength(0);
+  });
   it('keeps both memberships and existing password when classroom assignment is repeated', async () => {
     const db = await getDb();
     const before = (await db.query('SELECT password_hash FROM users WHERE id = $1', [student.id])).rows[0].password_hash;
@@ -93,14 +100,14 @@ describe('immutable discussion records and summaries', () => {
     expect(ready.history).toHaveLength(1);
     expect(ready.history[0].sources).toHaveLength(4);
     const db = await getDb();
-    expect((await db.query('SELECT id FROM discussion_summaries WHERE session_id = $1', [clubSession])).rows).toHaveLength(3);
+    expect((await db.query('SELECT id FROM cycle_discussion_summaries WHERE session_id = $1', [clubSession])).rows).toHaveLength(3);
   });
   it('retries failed meetings today but leaves today remote chat for the next day', async () => {
     await saveDiscussionEntry(student, { id: 'remote_today', sessionId: 'demo_session_1', kind: 'peer', content: '내일 질문을 정리하자.' });
     await saveDiscussionEntry(student, { id: 'meeting_today', sessionId: clubSession, kind: 'meeting', date: seoulDate(), content: '세 번 측정했다는 대면 메모', participantIds: [student.id] });
     expect(await summarizeDiscussionDay(clubSession, seoulDate(), async () => { throw new Error('unavailable'); })).toBe(false);
     const db = await getDb();
-    await db.query('UPDATE discussion_days SET retry_after = NULL WHERE session_id = $1', [clubSession]);
+    await db.query('UPDATE cycle_discussion_days SET retry_after = NULL WHERE session_id = $1', [clubSession]);
     const result = await runDailySummaries(10, generator);
     expect(result).toEqual({ attempted: 1, completed: 1 });
     const data = await getDiscussionData(teacher, 'demo_session_1', seoulDate());

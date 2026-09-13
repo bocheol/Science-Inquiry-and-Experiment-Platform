@@ -9,6 +9,8 @@ export type SessionUser = {
   classId: string | null;
   classNumber: number | null;
   mustChangePassword: boolean;
+  accountType?: "standard" | "demo";
+  isMaster?: boolean;
 };
 
 export type MaterialItem = {
@@ -34,12 +36,14 @@ export type JournalImage = {
 export type ExperimentJournal = {
   id: string;
   sessionId: string;
+  cycleId: string;
   studentId: string;
   sessionNumber: number;
   date: string;
   activities: string;
   observations: string;
   reflections: string;
+  version: number;
   images: JournalImage[];
   createdAt: string;
   updatedAt: string;

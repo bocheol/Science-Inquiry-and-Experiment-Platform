@@ -304,6 +304,7 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
       <section className="card card-body no-print">
         <h2 className="section-heading">학생 명단 Excel 등록</h2>
         <p className="section-subtitle">여러 명을 등록할 때 사용합니다. 열 제목은 원본과 같은 ‘반, 번호, 성명, 조 번호’를 사용하며 기존 학생의 비밀번호는 바뀌지 않습니다.</p>
+        <p className="section-subtitle">XLS·XLSX 파일, 2MB 이하, 첫 시트의 학생 1,000명까지 등록할 수 있습니다. 머리글을 포함해 1,001행·32열 이내로 준비해 주세요.</p>
         <form onSubmit={uploadRoster} className="drop-zone">
           <div>
             <div style={{ fontSize: 28, marginBottom: 8 }}>📊</div>

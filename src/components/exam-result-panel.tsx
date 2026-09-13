@@ -19,14 +19,14 @@ type PublishedExam = {
 
 const scopeLabel = { common: "전체 공통", team: "팀 공통", individual: "개인화" } as const;
 
-export function ExamResultPanel() {
+export function ExamResultPanel({ teamId }: { teamId?: string }) {
   const [data, setData] = useState<PublishedExam | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
-    void fetch("/api/inquiry/exam", { cache: "no-store" })
+    void fetch(`/api/inquiry/exam${teamId ? `?teamId=${encodeURIComponent(teamId)}` : ""}`, { cache: "no-store" })
       .then(async (response) => {
         const result = (await response.json()) as { data?: PublishedExam | null; message?: string };
         if (!response.ok) throw new Error(result.message ?? "시험 결과를 불러오지 못했습니다.");
@@ -35,7 +35,7 @@ export function ExamResultPanel() {
       .catch((cause: unknown) => active && setError(cause instanceof Error ? cause.message : "시험 결과를 불러오지 못했습니다."))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, []);
+  }, [teamId]);
 
   if (loading) return <div className="empty-state">시험 결과를 확인하고 있어요.</div>;
   if (error) return <div className="error-box">{error}</div>;

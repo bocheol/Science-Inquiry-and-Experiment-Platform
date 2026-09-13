@@ -3,44 +3,68 @@ import { audit, getDb } from "@/lib/db";
 import { ACADEMIC_YEAR } from "@/lib/constants";
 import { createId } from "@/lib/id";
 import { generateTemporaryPassword } from "@/lib/passwords";
+import { lockStudentTeams } from "@/lib/team-mutation-locks";
+import { ensureInitialCycle } from "@/lib/inquiry-cycles";
+import { UserFacingError } from "@/lib/user-facing-error";
 
 export async function assertTeacherId(actorId: string) {
   const db = await getDb();
-  const result = await db.query("SELECT id FROM users WHERE id = $1 AND role = 'teacher' AND status = 'active' AND must_change_password = FALSE", [actorId]);
-  if (!result.rows[0]) throw new Error("교사 권한이 필요합니다.");
+  const result = await db.query("SELECT id FROM users WHERE id = $1 AND role = 'teacher' AND status = 'active' AND must_change_password = FALSE AND academic_year = $2", [actorId, ACADEMIC_YEAR]);
+  if (!result.rows[0]) throw new UserFacingError("교사 권한이 필요합니다.");
 }
 
 export async function createClub(actorId: string, name: string) {
   await assertTeacherId(actorId);
   name = name.trim();
-  if (!name || name.length > 60) throw new Error("동아리 이름을 60자 이내로 입력해 주세요.");
+  if (!name || name.length > 60) throw new UserFacingError("동아리 이름을 60자 이내로 입력해 주세요.");
   const db = await getDb();
   const id = createId("club");
-  await db.query("INSERT INTO clubs (id, academic_year, name, created_by) VALUES ($1, $2, $3, $4)", [id, ACADEMIC_YEAR, name, actorId]);
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("INSERT INTO clubs (id, academic_year, name, created_by) VALUES ($1, $2, $3, $4)", [id, ACADEMIC_YEAR, name, actorId]);
+    await client.query("INSERT INTO club_teacher_assignments (club_id, teacher_id, assigned_by) VALUES ($1, $2, $2)", [id, actorId]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   await audit(actorId, "club_created", "club", id);
   return id;
 }
 
-async function assertClub(clubId: string) {
+async function assertClub(actorId: string, clubId: string) {
   const db = await getDb();
-  const found = await db.query("SELECT id FROM clubs WHERE id = $1 AND academic_year = $2", [clubId, ACADEMIC_YEAR]);
-  if (!found.rows[0]) throw new Error("동아리를 찾을 수 없습니다.");
+  const actor = await db.query<{ is_master: boolean }>("SELECT is_master FROM users WHERE id = $1", [actorId]);
+  const found = actor.rows[0]?.is_master
+    ? await db.query("SELECT id FROM clubs WHERE id = $1 AND academic_year = $2", [clubId, ACADEMIC_YEAR])
+    : await db.query(`SELECT c.id FROM clubs c JOIN club_teacher_assignments a ON a.club_id = c.id
+        WHERE c.id = $1 AND c.academic_year = $2 AND a.teacher_id = $3`, [clubId, ACADEMIC_YEAR, actorId]);
+  if (!found.rows[0]) throw new UserFacingError("동아리를 찾을 수 없습니다.");
 }
 
 export async function createClubTeam(actorId: string, clubId: string, name: string) {
-  await assertTeacherId(actorId); await assertClub(clubId);
+  await assertTeacherId(actorId); await assertClub(actorId, clubId);
   name = name.trim();
-  if (!name || name.length > 60) throw new Error("팀 이름을 60자 이내로 입력해 주세요.");
+  if (!name || name.length > 60) throw new UserFacingError("팀 이름을 60자 이내로 입력해 주세요.");
   const db = await getDb(); const client = await db.connect();
   const teamId = createId("team"); const sessionId = createId("session");
   try {
     await client.query("BEGIN");
     await client.query("SELECT id FROM clubs WHERE id = $1 FOR UPDATE", [clubId]);
+    const configs = await client.query<{ config_type: string; id: string }>(`SELECT config_type, id FROM club_config_versions
+      WHERE club_id = $1 AND config_key = 'default' AND status = 'published' AND config_type IN ('plan', 'report')
+      ORDER BY version_number DESC`, [clubId]);
+    const planConfigId = configs.rows.find((item) => item.config_type === "plan")?.id ?? null;
+    const reportConfigId = configs.rows.find((item) => item.config_type === "report")?.id ?? null;
     const count = await client.query<{ next: number }>("SELECT COALESCE(MAX(team_number), 0) + 1 AS next FROM teams WHERE club_id = $1", [clubId]);
     await client.query("INSERT INTO teams (id, club_id, team_number, name) VALUES ($1, $2, $3, $4)", [teamId, clubId, count.rows[0].next, name]);
     await client.query("INSERT INTO inquiry_sessions (id, team_id) VALUES ($1, $2)", [sessionId, teamId]);
-    await client.query("INSERT INTO investigation_plans (id, session_id) VALUES ($1, $2)", [createId("plan"), sessionId]);
-    await client.query("INSERT INTO reports (id, session_id) VALUES ($1, $2)", [createId("report"), sessionId]);
+    const cycleId = await ensureInitialCycle(client, sessionId, actorId);
+    await client.query("INSERT INTO investigation_plans (id, session_id, cycle_id, config_version_id) VALUES ($1, $2, $3, $4)", [createId("plan"), sessionId, cycleId, planConfigId]);
+    await client.query("INSERT INTO reports (id, session_id, cycle_id, config_version_id) VALUES ($1, $2, $3, $4)", [createId("report"), sessionId, cycleId, reportConfigId]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   await audit(actorId, "club_team_created", "team", teamId);
@@ -48,21 +72,24 @@ export async function createClubTeam(actorId: string, clubId: string, name: stri
 }
 
 export async function enrollClubStudent(actorId: string, clubId: string, loginId: string, name: string) {
-  await assertTeacherId(actorId); await assertClub(clubId);
+  await assertTeacherId(actorId); await assertClub(actorId, clubId);
   loginId = loginId.trim(); name = name.trim();
-  if (!/^[12](0[1-9]|[1-9][0-9])(0[1-9]|[1-9][0-9])$/.test(loginId)) throw new Error("1·2학년의 5자리 학번을 입력해 주세요.");
+  const isStudentNumber = /^[12](0[1-9]|[1-9][0-9])(0[1-9]|[1-9][0-9])$/.test(loginId);
+  const isDemoLogin = /^demo-[A-Za-z0-9._-]{1,34}$/i.test(loginId);
+  if (!isStudentNumber && !isDemoLogin) throw new UserFacingError("1·2학년의 5자리 학번 또는 마스터가 만든 demo- 체험 아이디를 입력해 주세요.");
   const db = await getDb();
   const client = await db.connect();
   try {
   await client.query('BEGIN');
   // Registration in one club is serialized, and account + membership commit together.
   await client.query('SELECT id FROM clubs WHERE id = $1 FOR UPDATE', [clubId]);
-  const existing = await client.query<{ id: string; role: string; status: string }>("SELECT id, role, status FROM users WHERE academic_year = $1 AND login_id = $2 FOR UPDATE", [ACADEMIC_YEAR, loginId]);
+  const existing = await client.query<{ id: string; role: string; status: string; account_type: string }>("SELECT id, role, status, account_type FROM users WHERE academic_year = $1 AND login_id = $2 FOR UPDATE", [ACADEMIC_YEAR, loginId]);
   let studentId = existing.rows[0]?.id; let temporaryPassword: string | null = null;
-  if (existing.rows[0] && (existing.rows[0].role !== "student" || existing.rows[0].status !== "active")) throw new Error("활성 학생 계정인지 확인해 주세요. 비활성 계정은 먼저 복원해 주세요.");
+  if (existing.rows[0] && (existing.rows[0].role !== "student" || existing.rows[0].status !== "active")) throw new UserFacingError("활성 학생 계정인지 확인해 주세요. 비활성 계정은 먼저 복원해 주세요.");
+  if (isDemoLogin && (!existing.rows[0] || existing.rows[0].account_type !== "demo")) throw new UserFacingError("체험 계정은 마스터 계정 관리에서 먼저 만들어 주세요.");
   if (!studentId) {
-    if (!name || name.length > 80) throw new Error("새 학생의 이름을 입력해 주세요.");
-    if (loginId.startsWith("1")) throw new Error("1학년 학생은 수업 학생 관리에서 먼저 등록한 뒤 동아리에 추가해 주세요.");
+    if (!name || name.length > 80) throw new UserFacingError("새 학생의 이름을 입력해 주세요.");
+    if (loginId.startsWith("1")) throw new UserFacingError("1학년 학생은 수업 학생 관리에서 먼저 등록한 뒤 동아리에 추가해 주세요.");
     studentId = createId("user"); temporaryPassword = generateTemporaryPassword();
     await client.query("INSERT INTO users (id, name, login_id, academic_year, role, password_hash, must_change_password) VALUES ($1, $2, $3, $4, 'student', $5, TRUE)", [studentId, name, loginId, ACADEMIC_YEAR, await hash(temporaryPassword, 12)]);
   }
@@ -74,13 +101,13 @@ export async function enrollClubStudent(actorId: string, clubId: string, loginId
 }
 
 export async function assignClubStudent(actorId: string, clubId: string, studentId: string, teamId: string, leader = false) {
-  await assertTeacherId(actorId); await assertClub(clubId);
+  await assertTeacherId(actorId); await assertClub(actorId, clubId);
   const db = await getDb(); const client = await db.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [studentId]);
-    const valid = await client.query("SELECT u.id FROM users u JOIN club_members cm ON cm.user_id = u.id JOIN teams t ON t.club_id = cm.club_id WHERE u.id = $1 AND cm.club_id = $2 AND t.id = $3 AND u.status = 'active' AND cm.status = 'active' AND t.status = 'active'", [studentId, clubId, teamId]);
-    if (!valid.rows[0]) throw new Error("같은 동아리의 활성 학생과 팀을 선택해 주세요.");
+    await lockStudentTeams(client, studentId, [teamId]);
+    const valid = await client.query("SELECT u.id FROM users u JOIN club_members cm ON cm.user_id = u.id JOIN teams t ON t.club_id = cm.club_id WHERE u.id = $1 AND cm.club_id = $2 AND t.id = $3 AND u.status = 'active' AND cm.status = 'active' AND t.status = 'active' AND u.academic_year = $4", [studentId, clubId, teamId, ACADEMIC_YEAR]);
+    if (!valid.rows[0]) throw new UserFacingError("같은 동아리의 활성 학생과 팀을 선택해 주세요.");
     await client.query("UPDATE team_members SET status = 'inactive', left_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND status = 'active' AND team_id <> $2 AND team_id IN (SELECT id FROM teams WHERE club_id = $3)", [studentId, teamId, clubId]);
     await client.query("UPDATE teams SET leader_user_id = NULL WHERE club_id = $1 AND id <> $2 AND leader_user_id = $3", [clubId, teamId, studentId]);
     const found = await client.query("SELECT id FROM team_members WHERE user_id = $1 AND team_id = $2 AND status = 'active'", [studentId, teamId]);
@@ -92,11 +119,13 @@ export async function assignClubStudent(actorId: string, clubId: string, student
 }
 
 export async function leaveClub(actorId: string, clubId: string, studentId: string) {
-  await assertTeacherId(actorId); await assertClub(clubId);
+  await assertTeacherId(actorId); await assertClub(actorId, clubId);
   const db = await getDb(); const client = await db.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [studentId]);
+    await lockStudentTeams(client, studentId);
+    const student = await client.query("SELECT id FROM users WHERE id = $1 AND academic_year = $2", [studentId, ACADEMIC_YEAR]);
+    if (!student.rows[0]) throw new UserFacingError("현재 학년도 학생을 선택해 주세요.");
     await client.query("UPDATE team_members SET status = 'inactive', left_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND status = 'active' AND team_id IN (SELECT id FROM teams WHERE club_id = $2)", [studentId, clubId]);
     await client.query("UPDATE teams SET leader_user_id = NULL WHERE club_id = $1 AND leader_user_id = $2", [clubId, studentId]);
     await client.query("UPDATE club_members SET status = 'inactive', left_at = CURRENT_TIMESTAMP WHERE club_id = $1 AND user_id = $2", [clubId, studentId]);
@@ -108,11 +137,17 @@ export async function leaveClub(actorId: string, clubId: string, studentId: stri
 export async function getClubManagement(actorId: string) {
   await assertTeacherId(actorId);
   const db = await getDb();
-  const clubs = await db.query<{ id: string; name: string }>("SELECT id, name FROM clubs WHERE academic_year = $1 ORDER BY created_at", [ACADEMIC_YEAR]);
+  const actor = await db.query<{ is_master: boolean }>("SELECT is_master FROM users WHERE id = $1", [actorId]);
+  const assignmentJoin = actor.rows[0]?.is_master ? "" : " JOIN club_teacher_assignments a ON a.club_id = c.id";
+  const access = actor.rows[0]?.is_master ? "" : " AND a.teacher_id = $2";
+  const params = actor.rows[0]?.is_master ? [ACADEMIC_YEAR] : [ACADEMIC_YEAR, actorId];
+  const clubs = await db.query<{ id: string; name: string }>(`SELECT c.id, c.name FROM clubs c${assignmentJoin} WHERE c.academic_year = $1${access} ORDER BY c.created_at`, params);
   const teams = await db.query<{ id: string; club_id: string; name: string; status: string; leader_user_id: string | null; topic: string | null; plan_status: string; report_status: string }>(`SELECT t.id, t.club_id, t.name, t.status, t.leader_user_id, s.selected_topic AS topic, p.review_status AS plan_status, r.status AS report_status
-    FROM teams t JOIN clubs c ON c.id = t.club_id LEFT JOIN inquiry_sessions s ON s.team_id = t.id LEFT JOIN investigation_plans p ON p.session_id = s.id LEFT JOIN reports r ON r.session_id = s.id WHERE c.academic_year = $1 ORDER BY t.team_number`, [ACADEMIC_YEAR]);
-  const students = await db.query<{ id: string; club_id: string; name: string; login_id: string; status: string; account_status: string }>("SELECT u.id, cm.club_id, u.name, u.login_id, cm.status, u.status AS account_status FROM club_members cm JOIN users u ON u.id = cm.user_id JOIN clubs c ON c.id = cm.club_id WHERE c.academic_year = $1 ORDER BY u.login_id", [ACADEMIC_YEAR]);
-  const members = await db.query<{ user_id: string; team_id: string }>("SELECT tm.user_id, tm.team_id FROM team_members tm JOIN teams t ON t.id = tm.team_id WHERE t.club_id IS NOT NULL AND tm.status = 'active'");
+    FROM teams t JOIN clubs c ON c.id = t.club_id${assignmentJoin} LEFT JOIN inquiry_sessions s ON s.team_id = t.id LEFT JOIN investigation_plans p ON p.session_id = s.id LEFT JOIN reports r ON r.session_id = s.id WHERE c.academic_year = $1${access} ORDER BY t.team_number`, params);
+  const students = await db.query<{ id: string; club_id: string; name: string; login_id: string; status: string; account_status: string }>(`SELECT u.id, cm.club_id, u.name, u.login_id, cm.status, u.status AS account_status FROM club_members cm JOIN users u ON u.id = cm.user_id JOIN clubs c ON c.id = cm.club_id${assignmentJoin} WHERE c.academic_year = $1 AND u.academic_year = $1${access} ORDER BY u.login_id`, params);
+  const members = await db.query<{ user_id: string; team_id: string }>(`SELECT tm.user_id, tm.team_id FROM team_members tm
+    JOIN users u ON u.id = tm.user_id JOIN teams t ON t.id = tm.team_id JOIN clubs c ON c.id = t.club_id${assignmentJoin}
+    WHERE c.academic_year = $1 AND u.academic_year = $1${access} AND tm.status = 'active'`, params);
   return { clubs: clubs.rows, teams: teams.rows, students: students.rows, members: members.rows };
 }
 
@@ -124,6 +159,7 @@ export async function getStudentActivities(userId: string) {
      LEFT JOIN classes c ON c.id = t.class_id LEFT JOIN clubs cl ON cl.id = t.club_id
      JOIN inquiry_sessions s ON s.team_id = t.id
      WHERE tm.user_id = $1 AND tm.status = 'active' AND t.status = 'active' AND u.status = 'active'
-     ORDER BY t.created_at, t.id`, [userId]);
+       AND u.academic_year = $2 AND COALESCE(c.academic_year, cl.academic_year) = $2
+     ORDER BY t.created_at, t.id`, [userId, ACADEMIC_YEAR]);
   return result.rows;
 }

@@ -1,0 +1,57 @@
+import { expect, it } from "vitest";
+import { getDb } from "@/lib/db";
+import { getDiscussionData, markDiscussionMessagesRead, saveDiscussionEntry, seoulDate, type DiscussionActor } from "@/lib/discussions";
+import { assignStudent, removeStudent } from "@/lib/teams";
+
+it("pins recipient memberships once and does not invent recipients on retries or rejoining", async () => {
+  const db = await getDb();
+  const actor: DiscussionActor = { id: "demo_student_1", role: "student", mustChangePassword: false };
+  const team = "demo_team_1", peer = "demo_student_2";
+  await assignStudent("teacher_bootstrap", peer, team);
+  const input = { id: "recipient_original", sessionId: "demo_session_1", kind: "peer" as const, content: "합성 수신 대상 확인" };
+  await saveDiscussionEntry(actor, input);
+  const read = async () => (await db.query("SELECT * FROM discussion_message_recipients WHERE entry_id=$1 ORDER BY user_id", [input.id])).rows;
+  const original = await read();
+  expect(original.some(row => row.user_id === actor.id)).toBe(false);
+  expect(original.find(row => row.user_id === peer)).toMatchObject({ read_at: null });
+  expect(original.length).toBeGreaterThan(0);
+  const cycle = (await db.query("SELECT cycle_id FROM discussion_entries WHERE id=$1", [input.id])).rows[0].cycle_id;
+  const reader: DiscussionActor = { ...actor, id: peer };
+  expect((await getDiscussionData(reader, input.sessionId, seoulDate(), cycle)).receipts).toEqual([]);
+  expect(await markDiscussionMessagesRead(reader, input.sessionId, cycle, [input.id, "nonexistent_message"])).toEqual({ marked: 1 });
+  const firstRead = await read();
+  expect(firstRead.find(row => row.user_id === peer).read_at).toBeTruthy();
+  expect(await markDiscussionMessagesRead(reader, input.sessionId, cycle, [input.id])).toEqual({ marked: 0 });
+  expect(await read()).toEqual(firstRead);
+  expect((await getDiscussionData(actor, input.sessionId, seoulDate(), cycle)).receipts.find(row => row.userId === peer)?.readAt).toBeTruthy();
+
+  const newcomer = "recipient_newcomer";
+  await db.query("INSERT INTO users(id,name,login_id,academic_year,role,class_id,password_hash,must_change_password) VALUES($1,'합성 새 팀원',$1,2026,'student','class_2026_9','unused',FALSE)", [newcomer]);
+  await assignStudent("teacher_bootstrap", newcomer, team);
+  const newcomerActor: DiscussionActor = { ...actor, id: newcomer };
+  const newcomerView = await getDiscussionData(newcomerActor, input.sessionId, seoulDate(), cycle);
+  expect(newcomerView.sources.some(entry => entry.id === input.id)).toBe(true);
+  expect(newcomerView.unreadEntryIds).not.toContain(input.id);
+  expect(await markDiscussionMessagesRead(newcomerActor, input.sessionId, cycle, [input.id])).toEqual({ marked: 0 });
+  expect((await read()).some(row => row.user_id === newcomer)).toBe(false);
+
+  await saveDiscussionEntry(actor, { ...input, id: "recipient_after_newcomer" });
+  expect((await db.query("SELECT user_id FROM discussion_message_recipients WHERE entry_id='recipient_after_newcomer' ORDER BY user_id")).rows.map(row => row.user_id)).toEqual([...original.map(row => row.user_id), newcomer].sort());
+  expect(await markDiscussionMessagesRead(newcomerActor, input.sessionId, cycle, ["recipient_after_newcomer"])).toEqual({ marked: 1 });
+  await expect(markDiscussionMessagesRead({ id: "teacher_bootstrap", role: "teacher", mustChangePassword: false }, input.sessionId, cycle, [input.id])).rejects.toMatchObject({ status: 403 });
+  await expect(markDiscussionMessagesRead(reader, input.sessionId, "wrong-cycle", [input.id])).rejects.toMatchObject({ status: 404 });
+  await saveDiscussionEntry(actor, { ...input, id: "recipient_unread_old" });
+  await removeStudent("teacher_bootstrap", peer, team);
+  await expect(markDiscussionMessagesRead(reader, input.sessionId, cycle, ["recipient_unread_old"])).rejects.toMatchObject({ status: 403 });
+  await assignStudent("teacher_bootstrap", peer, team);
+  const current = (await db.query("SELECT id FROM team_members WHERE user_id=$1 AND team_id=$2 AND status='active'", [peer, team])).rows[0];
+  expect(current.id).not.toBe(original.find(row => row.user_id === peer).membership_id);
+  await saveDiscussionEntry(actor, input);
+  expect(await read()).toEqual(firstRead);
+  expect(await markDiscussionMessagesRead(reader, input.sessionId, cycle, ["recipient_unread_old"])).toEqual({ marked: 0 });
+  expect((await db.query("SELECT read_at FROM discussion_message_recipients WHERE entry_id='recipient_unread_old' AND user_id=$1", [peer])).rows[0].read_at).toBeNull();
+  await saveDiscussionEntry(actor, { ...input, id: "recipient_after_rejoin" });
+  expect((await db.query("SELECT membership_id FROM discussion_message_recipients WHERE entry_id='recipient_after_rejoin' AND user_id=$1", [peer])).rows[0].membership_id).toBe(current.id);
+  expect(await markDiscussionMessagesRead(reader, input.sessionId, cycle, ["recipient_after_rejoin"])).toEqual({ marked: 1 });
+  expect((await db.query("SELECT content FROM discussion_entries WHERE id=$1", [input.id])).rows[0].content).toBe(input.content);
+});

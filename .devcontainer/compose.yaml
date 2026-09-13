@@ -1,0 +1,48 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    command: sleep infinity
+    volumes:
+      - ..:/workspaces/science-inquiry:cached
+    environment:
+      SCIENCE_CLOUD_DEV: "1"
+      NEXT_TELEMETRY_DISABLED: "1"
+      PDF_FONT_PATH: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+      DATABASE_URL: postgresql://science_dev:science_dev_only@db:5432/science_dev
+      DATABASE_SSL: "false"
+      INSTANCE_UNIX_SOCKET: ""
+      DB_USER: ""
+      DB_PASSWORD: ""
+      DB_NAME: ""
+      OPENAI_API_KEY: ""
+      GOOGLE_SERVICE_ACCOUNT_JSON: ""
+      GOOGLE_APPLICATION_CREDENTIALS: ""
+      GOOGLE_CLOUD_PROJECT: ""
+      GOOGLE_SPREADSHEET_ID: ""
+      K_SERVICE: ""
+      VAPID_PUBLIC_KEY: ""
+      VAPID_PRIVATE_KEY: ""
+      VAPID_SUBJECT: ""
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:16-bookworm
+    environment:
+      # Disposable development database only; never used by Cloud Run.
+      POSTGRES_USER: science_dev
+      POSTGRES_PASSWORD: science_dev_only
+      POSTGRES_DB: science_dev
+    volumes:
+      - science-dev-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U science_dev -d science_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # No host port: the database is reachable only inside this Compose network.
+volumes:
+  science-dev-db:

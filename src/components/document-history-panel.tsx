@@ -10,6 +10,7 @@ const actionLabels: Record<string, string> = {
   teacher_approve: "교사 승인 전 상태",
   teacher_feedback: "교사 피드백 전 상태",
   teacher_review: "교사 확인 전 상태",
+  exam_evidence_capture: "시험 근거로 고정한 확인 보고서",
   restore_previous_state: "이전 복원 전 상태",
 };
 

@@ -1,16 +1,22 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import { assertActiveTeamMember } from "@/lib/inquiry-data";
 import { sendTeamMessage, userFacingAiError } from "@/lib/ai";
 import { getDb } from "@/lib/db";
 
-const schema = z.object({ sessionId: z.string(), content: z.string().trim().min(1).max(4000) });
+const schema = z.object({
+  sessionId: z.string(),
+  cycleId: z.string().min(1),
+  content: z.string().trim().min(1).max(4000),
+  requestId: z.string().uuid().optional(),
+});
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user || user.role !== "student" || user.mustChangePassword) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const parsed = schema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "질문을 입력해 주세요." }, { status: 400 });
   try {
     const teamId = await assertActiveTeamMember(user.id, parsed.data.sessionId);
@@ -22,7 +28,7 @@ export async function POST(request: Request) {
     );
     const index = members.rows.findIndex((member) => member.id === user.id);
     const alias = `팀원 ${String.fromCharCode(65 + Math.max(0, index))}`;
-    const result = await sendTeamMessage(parsed.data.sessionId, teamId, { id: user.id, alias }, parsed.data.content);
+    const result = await sendTeamMessage(parsed.data.sessionId, teamId, { id: user.id, alias }, parsed.data.content, parsed.data.requestId, parsed.data.cycleId);
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     return NextResponse.json({ message: userFacingAiError(error) }, { status: 503 });

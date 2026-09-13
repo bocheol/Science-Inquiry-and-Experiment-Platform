@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default async function TeacherExamsPage() {
   const user = await requireUser("teacher");
-  const data = await getExamManagementData(9);
+  const data = await getExamManagementData(9, undefined, user.id);
   return (
     <>
       <AppHeader name={user.name} role="teacher" />

@@ -3,10 +3,36 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { audit, getDb } from "@/lib/db";
-import { createId } from "@/lib/id";
 import { getAiRuntime, observeOpenAiRequest, shouldUseWebResearch } from "@/lib/ai-config";
 import { markDiscussionDay, seoulDate } from "@/lib/discussions";
 import { studentTextRedactor } from "@/lib/student-privacy";
+import { aiRequestKey, beginAiJob, completeAiJob, failAiJob, ownsAiJob } from "@/lib/ai-jobs";
+import type { PoolClient } from "pg";
+import { assertDiscussionAccess } from "@/lib/discussions";
+import { lockStudentsTeams } from "@/lib/team-mutation-locks";
+import { UserFacingError, userFacingMessage } from "@/lib/user-facing-error";
+
+async function lockAiCycle(client: PoolClient, sessionId: string, teamId: string, actorId: string, expectedCycleId?: string) {
+  const session = await client.query<{ team_id: string; selected_topic: string | null }>("SELECT team_id, selected_topic FROM inquiry_sessions WHERE id = $1 FOR UPDATE", [sessionId]);
+  const cycle = await client.query<{ id: string }>("SELECT id FROM inquiry_cycles WHERE session_id = $1 AND status = 'active' ORDER BY ordinal DESC LIMIT 1 FOR UPDATE", [sessionId]);
+  const cycleId = cycle.rows[0]?.id;
+  if (!cycleId || (expectedCycleId !== undefined && expectedCycleId !== cycleId)) throw new UserFacingError("탐구 회차가 변경되었거나 완료되었습니다. 현재 회차를 확인해 주세요.");
+  if (session.rows[0]?.team_id !== teamId) throw new UserFacingError("현재 팀 자료에 접근할 수 없습니다.");
+  await lockStudentsTeams(client, [actorId], [teamId]);
+  await assertDiscussionAccess({ id: actorId, role: "student", mustChangePassword: false }, sessionId, true, client);
+  return { cycleId, selectedTopic: session.rows[0].selected_topic };
+}
+
+async function currentAiCycle(sessionId: string, teamId: string, actorId: string, expectedCycleId?: string) {
+  const client = await (await getDb()).connect();
+  try {
+    await client.query("BEGIN");
+    const boundary = await lockAiCycle(client, sessionId, teamId, actorId, expectedCycleId);
+    await client.query("COMMIT");
+    return boundary;
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
 
 const BASE_INSTRUCTIONS = `당신은 고등학교 과학탐구실험 수업과 과학 동아리의 팀 탐구를 돕는 친절하고 정확한 연구 조력자입니다.
 
@@ -37,8 +63,19 @@ const suggestionSchema = z.object({
   })).length(3),
 });
 
+const chatResultSchema = z.object({
+  answer: z.string(),
+  citations: z.array(z.object({ title: z.string(), url: z.string() })),
+});
+
+function busyError(kind: "topic" | "message") {
+  return new UserFacingError(kind === "topic"
+    ? "AI가 이전 질문에 답변 중입니다. 잠시만 기다려 주세요."
+    : "AI가 이전 질문에 답변 중입니다. 답변이 끝난 뒤 보내 주세요.");
+}
+
 export function getOpenAIClient() {
-  if (!process.env.OPENAI_API_KEY) throw new Error("OpenAI API 키가 설정되지 않았습니다.");
+  if (!process.env.OPENAI_API_KEY) throw new UserFacingError("OpenAI API 키가 설정되지 않았습니다.");
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
@@ -55,7 +92,7 @@ export function userFacingAiError(error: unknown) {
   if (error instanceof OpenAI.APIConnectionError) {
     return "AI 서비스에 연결하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.";
   }
-  return error instanceof Error ? error.message : "AI 답변을 만들지 못했습니다.";
+  return userFacingMessage(error, "AI 답변을 만들지 못했습니다. 잠시 후 다시 시도해 주세요.");
 }
 
 export function safetyIdentifier(teamId: string) {
@@ -76,9 +113,18 @@ function collectCitations(response: OpenAI.Responses.Response) {
   return [...found.values()];
 }
 
-export async function generateTopicSuggestions(sessionId: string, teamId: string, interest: string, actorId: string) {
-  const locked = await lockAi(sessionId);
-  if (!locked) throw new Error("AI가 이전 질문에 답변 중입니다. 잠시만 기다려 주세요.");
+export async function generateTopicSuggestions(sessionId: string, teamId: string, interest: string, actorId: string, clientRequestId?: string, expectedCycleId?: string) {
+  const normalizedInterest = interest.trim();
+  const { cycleId } = await currentAiCycle(sessionId, teamId, actorId, expectedCycleId);
+  const requestKey = aiRequestKey("topic_suggestions", { policy: 2, cycleId, actorId, clientRequestId: clientRequestId ?? null, teamId, interest: normalizedInterest });
+  const job = await beginAiJob<z.infer<typeof suggestionSchema>>({
+    resourceKey: `inquiry:${sessionId}`,
+    requestKey,
+    feature: "topic_suggestions",
+    actorId,
+  });
+  if (job.kind === "busy") throw busyError("topic");
+  if (job.kind === "cached") return suggestionSchema.parse(job.result);
   try {
     const runtime = getAiRuntime("topic_suggestions");
     const { redact } = await studentTextRedactor();
@@ -89,37 +135,38 @@ export async function generateTopicSuggestions(sessionId: string, teamId: string
         store: false,
         safety_identifier: safetyIdentifier(teamId),
         instructions: `${BASE_INSTRUCTIONS}\n\n지금은 DIVERGE 단계입니다. 관심사를 통합과학과 연결한 서로 다른 탐구 방향을 정확히 3개 제안하세요. 단순 실험이면 측정 가능한 변인과 대조 조건을 추가하세요. 학생이 학교에서 수행 가능한지와 안전도 함께 판단하세요.`,
-        input: `팀의 관심사: ${redact(interest)}`,
+        input: `팀의 관심사: ${redact(normalizedInterest)}`,
         text: { format: zodTextFormat(suggestionSchema, "inquiry_directions") },
-      }),
+      }, { headers: { "X-Client-Request-Id": job.requestKey } }),
     );
-    if (!response.output_parsed) throw new Error("AI의 탐구 방향 형식을 확인하지 못했습니다.");
+    if (!response.output_parsed) throw new UserFacingError("AI의 탐구 방향 형식을 확인하지 못했습니다.");
+    const output = suggestionSchema.parse(response.output_parsed);
     const db = await getDb();
-    await db.query(
-      `UPDATE inquiry_sessions
-          SET interest_input = $1, ai_topic_suggestions = $2, stage = 'STARTING', last_activity_at = CURRENT_TIMESTAMP
-        WHERE id = $3`,
-      [interest, JSON.stringify(response.output_parsed), sessionId],
-    );
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await lockAiCycle(client, sessionId, teamId, actorId, cycleId);
+      if (!(await ownsAiJob(client, job.jobId, job.leaseToken))) throw new UserFacingError("AI 작업 소유권이 만료되었습니다. 다시 시도해 주세요.");
+      await client.query(
+        `UPDATE inquiry_sessions
+            SET interest_input = $1, ai_topic_suggestions = $2, last_activity_at = CURRENT_TIMESTAMP
+          WHERE id = $3`,
+        [normalizedInterest, JSON.stringify(output), sessionId],
+      );
+      if (!(await completeAiJob(client, job.jobId, job.leaseToken, output))) throw new UserFacingError("AI 작업 결과를 저장하지 못했습니다.");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     await audit(actorId, "topic_suggestions_generated", "inquiry_session", sessionId);
-    return response.output_parsed;
-  } finally {
-    await unlockAi(sessionId);
+    return output;
+  } catch (error) {
+    await failAiJob(job.jobId, job.leaseToken);
+    throw error;
   }
-}
-
-async function lockAi(sessionId: string) {
-  const db = await getDb();
-  const result = await db.query(
-    "UPDATE inquiry_sessions SET ai_busy = TRUE WHERE id = $1 AND ai_busy = FALSE RETURNING id",
-    [sessionId],
-  );
-  return Boolean(result.rows[0]);
-}
-
-async function unlockAi(sessionId: string) {
-  const db = await getDb();
-  await db.query("UPDATE inquiry_sessions SET ai_busy = FALSE WHERE id = $1", [sessionId]);
 }
 
 export async function sendTeamMessage(
@@ -127,41 +174,95 @@ export async function sendTeamMessage(
   teamId: string,
   actor: { id: string; alias: string },
   content: string,
+  clientRequestId?: string,
+  expectedCycleId?: string,
 ) {
-  const locked = await lockAi(sessionId);
-  if (!locked) throw new Error("AI가 이전 질문에 답변 중입니다. 답변이 끝난 뒤 보내 주세요.");
+  const normalizedContent = content.trim();
   const db = await getDb();
+  const { cycleId } = await currentAiCycle(sessionId, teamId, actor.id, expectedCycleId);
+  const requestKey = aiRequestKey("team_chat", {
+    policy: 2,
+    cycleId,
+    clientRequestId: clientRequestId ?? null,
+    actorId: actor.id,
+    content: normalizedContent,
+  });
+  const job = await beginAiJob<z.infer<typeof chatResultSchema>>({
+    resourceKey: `inquiry:${sessionId}`,
+    requestKey,
+    feature: "team_chat",
+    actorId: actor.id,
+  });
+  if (job.kind === "busy") throw busyError("message");
+  if (job.kind === "cached") return chatResultSchema.parse(job.result);
   try {
-    const sequenceResult = await db.query<{ next: number }>(
-      "SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM messages WHERE session_id = $1",
-      [sessionId],
+    const userMessageId = `message_user_${job.jobId}`;
+    const assistantMessageId = `message_assistant_${job.jobId}`;
+    const insertClient = await db.connect();
+    let userSequence = 0;
+    let selectedTopic: string | null = null;
+    let history = "";
+    try {
+      await insertClient.query("BEGIN");
+      selectedTopic = (await lockAiCycle(insertClient, sessionId, teamId, actor.id, cycleId)).selectedTopic;
+      if (!(await ownsAiJob(insertClient, job.jobId, job.leaseToken))) throw new UserFacingError("AI 작업 소유권이 만료되었습니다. 다시 시도해 주세요.");
+      const existingQuestion = await insertClient.query<{ sequence: number; created_at: Date; content: string; sender_id: string }>(
+        "SELECT sequence, created_at, content, sender_id FROM messages WHERE id = $1",
+        [userMessageId],
+      );
+      if (existingQuestion.rows[0]) {
+        if (existingQuestion.rows[0].content !== normalizedContent || existingQuestion.rows[0].sender_id !== actor.id) {
+          throw new UserFacingError("AI 질문 재시도 정보가 기존 기록과 다릅니다.");
+        }
+        userSequence = existingQuestion.rows[0].sequence;
+      } else {
+        const sequenceResult = await insertClient.query<{ next: number }>(
+          "SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM messages WHERE session_id = $1",
+          [sessionId],
+        );
+        userSequence = Number(sequenceResult.rows[0]?.next ?? 1);
+        const question = await insertClient.query<{ created_at: Date }>(
+          `INSERT INTO messages (id, session_id, cycle_id, sender_id, sender_alias, role, content, sequence)
+           VALUES ($1, $2, $3, $4, $5, 'user', $6, $7) RETURNING created_at`,
+          [userMessageId, sessionId, cycleId, actor.id, actor.alias, normalizedContent, userSequence],
+        );
+        await markDiscussionDay(sessionId, seoulDate(question.rows[0].created_at), insertClient, cycleId);
+      }
+      const historyResult = await insertClient.query<{ role: string; content: string; sender_alias: string | null }>(
+        "SELECT role, content, sender_alias FROM messages WHERE session_id = $1 AND cycle_id = $2 AND role IN ('user', 'assistant') ORDER BY sequence DESC LIMIT 15", [sessionId, cycleId],
+      );
+      history = historyResult.rows.reverse().map(message => message.role === "assistant" ? `AI: ${message.content}` : `${message.sender_alias ?? "팀원"}: ${message.content}`).join("\n");
+      await insertClient.query("COMMIT");
+    } catch (error) {
+      await insertClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      insertClient.release();
+    }
+
+    const alreadyAnswered = await db.query<{ content: string; citations: Array<{ title: string; url: string }> | string }>(
+      "SELECT content, citations FROM messages WHERE id = $1",
+      [assistantMessageId],
     );
-    const userSequence = Number(sequenceResult.rows[0]?.next ?? 1);
-    const question = await db.query<{ created_at: Date }>(
-      `INSERT INTO messages (id, session_id, sender_id, sender_alias, role, content, sequence)
-       VALUES ($1, $2, $3, $4, 'user', $5, $6) RETURNING created_at`,
-      [createId("message"), sessionId, actor.id, actor.alias, content, userSequence],
-    );
-    await markDiscussionDay(sessionId, seoulDate(question.rows[0].created_at));
-    const historyResult = await db.query<{
-      role: "user" | "assistant";
-      content: string;
-      sender_alias: string | null;
-    }>(
-      `SELECT role, content, sender_alias FROM messages
-        WHERE session_id = $1 AND role IN ('user', 'assistant')
-        ORDER BY sequence DESC LIMIT 15`,
-      [sessionId],
-    );
-    const sessionResult = await db.query<{
-      selected_topic: string | null;
-      conversation_summary: string;
-    }>("SELECT selected_topic, conversation_summary FROM inquiry_sessions WHERE id = $1", [sessionId]);
-    const session = sessionResult.rows[0];
-    const history = historyResult.rows.reverse().map((message) =>
-      message.role === "assistant" ? `AI: ${message.content}` : `${message.sender_alias ?? "팀원"}: ${message.content}`,
-    ).join("\n");
-    const useWebResearch = shouldUseWebResearch(content);
+    if (alreadyAnswered.rows[0]) {
+      const result = chatResultSchema.parse({
+        answer: alreadyAnswered.rows[0].content,
+        citations: typeof alreadyAnswered.rows[0].citations === "string"
+          ? JSON.parse(alreadyAnswered.rows[0].citations)
+          : alreadyAnswered.rows[0].citations,
+      });
+      const recoveryClient = await db.connect();
+      try {
+        await recoveryClient.query("BEGIN");
+        await lockAiCycle(recoveryClient, sessionId, teamId, actor.id, cycleId);
+        if (!(await ownsAiJob(recoveryClient, job.jobId, job.leaseToken)) || !(await completeAiJob(recoveryClient, job.jobId, job.leaseToken, result))) throw new UserFacingError("AI 작업 결과를 복구하지 못했습니다.");
+        await recoveryClient.query("COMMIT");
+      } catch (error) { await recoveryClient.query("ROLLBACK"); throw error; }
+      finally { recoveryClient.release(); }
+      await audit(actor.id, "ai_message_sent", "inquiry_session", sessionId);
+      return result;
+    }
+    const useWebResearch = shouldUseWebResearch(normalizedContent);
     const feature = useWebResearch ? "team_research" : "team_chat";
     const runtime = getAiRuntime(feature);
     const { redact } = await studentTextRedactor();
@@ -173,39 +274,44 @@ export async function sendTeamMessage(
         safety_identifier: safetyIdentifier(teamId),
         instructions: BASE_INSTRUCTIONS,
         input: redact([
-          session?.conversation_summary ? `이전 대화 요약: ${session.conversation_summary}` : "",
-          session?.selected_topic ? `현재 선택한 탐구 주제: ${session.selected_topic}` : "현재 주제는 아직 확정되지 않았습니다.",
+          selectedTopic ? `현재 선택한 탐구 주제: ${selectedTopic}` : "현재 주제는 아직 확정되지 않았습니다.",
           "최근 팀 대화:",
           history,
         ].filter(Boolean).join("\n\n")),
         ...(useWebResearch ? { tools: [{ type: "web_search" as const, search_context_size: "low" as const }] } : {}),
         max_output_tokens: 900,
-      }),
+      }, { headers: { "X-Client-Request-Id": job.requestKey } }),
     );
     const answer = response.output_text.trim();
-    if (!answer) throw new Error("AI 답변이 비어 있습니다.");
+    if (!answer) throw new UserFacingError("AI 답변이 비어 있습니다.");
     const citations = collectCitations(response);
-    const responseMessage = await db.query<{ created_at: Date }>(
-      `INSERT INTO messages (id, session_id, role, content, sequence, citations)
-       VALUES ($1, $2, 'assistant', $3, $4, $5) RETURNING created_at`,
-      [createId("message"), sessionId, answer, userSequence + 1, JSON.stringify(citations)],
-    );
-    await markDiscussionDay(sessionId, seoulDate(responseMessage.rows[0].created_at));
-    await db.query("UPDATE inquiry_sessions SET last_activity_at = CURRENT_TIMESTAMP, stage = CASE WHEN stage IN ('STARTING', 'EXPLORING') THEN 'EXPLORING' ELSE stage END WHERE id = $1", [sessionId]);
+    const result = chatResultSchema.parse({ answer, citations });
+    const completionClient = await db.connect();
+    try {
+      await completionClient.query("BEGIN");
+      await lockAiCycle(completionClient, sessionId, teamId, actor.id, cycleId);
+      if (!(await ownsAiJob(completionClient, job.jobId, job.leaseToken))) throw new UserFacingError("AI 작업 소유권이 만료되었습니다. 다시 시도해 주세요.");
+      const responseMessage = await completionClient.query<{ created_at: Date }>(
+        `INSERT INTO messages (id, session_id, cycle_id, role, content, sequence, citations)
+         VALUES ($1, $2, $3, 'assistant', $4, $5, $6)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING created_at`,
+        [assistantMessageId, sessionId, cycleId, answer, userSequence + 1, JSON.stringify(citations)],
+      );
+      if (responseMessage.rows[0]) await markDiscussionDay(sessionId, seoulDate(responseMessage.rows[0].created_at), completionClient, cycleId);
+      await completionClient.query("UPDATE inquiry_sessions SET last_activity_at = CURRENT_TIMESTAMP, stage = CASE WHEN stage IN ('STARTING', 'EXPLORING') THEN 'EXPLORING' ELSE stage END WHERE id = $1", [sessionId]);
+      if (!(await completeAiJob(completionClient, job.jobId, job.leaseToken, result))) throw new UserFacingError("AI 작업 결과를 저장하지 못했습니다.");
+      await completionClient.query("COMMIT");
+    } catch (error) {
+      await completionClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      completionClient.release();
+    }
     await audit(actor.id, "ai_message_sent", "inquiry_session", sessionId);
-    return { answer, citations };
-  } finally {
-    await unlockAi(sessionId);
+    return result;
+  } catch (error) {
+    await failAiJob(job.jobId, job.leaseToken);
+    throw error;
   }
-}
-
-export async function selectTopic(sessionId: string, planId: string, topic: string, actorId: string) {
-  const db = await getDb();
-  const plan = await db.query<{ form_data: Record<string, unknown> | string }>("SELECT form_data FROM investigation_plans WHERE id = $1 AND session_id = $2", [planId, sessionId]);
-  if (!plan.rows[0]) throw new Error("계획서를 찾을 수 없습니다.");
-  const formData = typeof plan.rows[0].form_data === "string" ? JSON.parse(plan.rows[0].form_data) : plan.rows[0].form_data;
-  formData.topic = topic;
-  await db.query("UPDATE investigation_plans SET form_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [JSON.stringify(formData), planId]);
-  await db.query("UPDATE inquiry_sessions SET selected_topic = $1, stage = 'EXPLORING', last_activity_at = CURRENT_TIMESTAMP WHERE id = $2", [topic, sessionId]);
-  await audit(actorId, "topic_selected", "inquiry_session", sessionId, { topic });
 }

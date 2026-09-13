@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormSaveError, saveForm, useFormDraft } from "@/components/use-form-draft";
+import { FormConflict } from "@/components/form-conflict";
 import type {
   EvaluationItem,
   EvaluationResponse,
@@ -15,14 +17,17 @@ type EvaluationData = {
     title: string;
     status: "open" | "closed" | "reviewing" | "published";
     template: { items: EvaluationItem[]; selfReflectionQuestions: [string, string] };
+    peerTemplate: { items: EvaluationItem[]; selfReflectionQuestions: [string, string] };
   };
   teammates: Array<{ id: string; name: string; loginId: string }>;
   selfEvaluation: null | {
+    version: number;
     responses: EvaluationResponse<SelfEvaluationValue>[];
     reflections: [string, string];
     submittedAt: string | null;
   };
   peerEvaluations: Array<{
+    version: number;
     evaluateeId: string;
     responses: EvaluationResponse<PeerEvaluationValue>[];
     privateEvidence: string;
@@ -53,6 +58,11 @@ function levelLabel(value: PeerEvaluationValue | SelfEvaluationValue) {
   if (value === "unable_to_judge") return "판단하기 어려움";
   if (value === "activity_unavailable") return "해당 활동 기회 없음";
   return `${value}단계`;
+}
+
+function evaluationText(responses: EvaluationResponse[], itemId: string) {
+  const response = responses.find((item) => item.itemId === itemId);
+  return response ? `${levelLabel(response.value)}${response.reason ? ` — ${response.reason}` : ""}` : "미제출";
 }
 
 function EvaluationChoices<T extends PeerEvaluationValue | SelfEvaluationValue>({
@@ -102,13 +112,30 @@ function EvaluationChoices<T extends PeerEvaluationValue | SelfEvaluationValue>(
   );
 }
 
-function SelfEvaluationForm({ data, onSaved }: { data: EvaluationData; onSaved: () => Promise<void> }) {
+type SelfDraft = { responses: EvaluationResponse<SelfEvaluationValue>[]; reflections: [string, string] };
+type PeerDraft = { responses: EvaluationResponse<PeerEvaluationValue>[]; privateEvidence: string; publicComment: string };
+
+function validResponses(value: unknown, items: EvaluationItem[], unavailable: string) {
+  return Array.isArray(value) && value.length === items.length && items.every((item) =>
+    value.filter((response) => response && response.itemId === item.id &&
+      ([1, 2, 3, 4, unavailable].includes(response.value)) && typeof response.reason === "string").length === 1);
+}
+
+function SelfEvaluationForm({ data, draftKey, onSaved }: { data: EvaluationData; draftKey: string; onSaved: () => Promise<void> }) {
   const { showToast } = useToast();
   const initial = data.selfEvaluation;
-  const [responses, setResponses] = useState<EvaluationResponse<SelfEvaluationValue>[]>(
-    initial?.responses.length ? initial.responses : emptyResponses(data.round.template.items, 3),
-  );
-  const [reflections, setReflections] = useState<[string, string]>(initial?.reflections ?? ["", ""]);
+  const server: SelfDraft = { responses: initial?.responses.length ? initial.responses : emptyResponses(data.round.template.items, 3), reflections: initial?.reflections ?? ["", ""] };
+  const draft = useFormDraft<SelfDraft>(draftKey, server, (value): value is SelfDraft => {
+    const candidate = value as SelfDraft | null;
+    return Boolean(candidate && validResponses(candidate.responses, data.round.template.items, "activity_unavailable") &&
+      Array.isArray(candidate.reflections) && candidate.reflections.length === 2 && candidate.reflections.every((text) => typeof text === "string"));
+  }, initial?.version ?? null);
+  const { responses, reflections } = data.round.status === "open" ? draft.value : server;
+  const { hydrate } = draft;
+  useEffect(() => { hydrate({ responses: initial?.responses.length ? initial.responses : emptyResponses(data.round.template.items, 3), reflections: initial?.reflections ?? ["", ""] }, initial?.version ?? null); }, [initial, data.round.template, hydrate]);
+  const setResponses = (update: (current: SelfDraft["responses"]) => SelfDraft["responses"]) => draft.change((current) => ({ ...current, responses: update(current.responses) }));
+  const setReflections = (update: (current: SelfDraft["reflections"]) => SelfDraft["reflections"]) => draft.change((current) => ({ ...current, reflections: update(current.reflections) }));
+  const sending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -124,27 +151,35 @@ function SelfEvaluationForm({ data, onSaved }: { data: EvaluationData; onSaved: 
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (sending.current || !editable || !draft.ready || draft.conflict) return;
+    sending.current = true;
+    const sent = draft.capture();
     setBusy(true);
     setError("");
     setMessage("");
-    const response = await fetch("/api/inquiry/evaluation", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "saveSelf", roundId: data.round.id, responses, reflections }),
-    });
-    const result = (await response.json()) as { message?: string };
-    setBusy(false);
-    if (!response.ok) {
-      const text = result.message ?? "자기평가를 저장하지 못했습니다.";
-      setError(text); showToast(text, "error"); return;
-    }
-    setMessage("자기평가를 저장했습니다. 평가가 열려 있는 동안 다시 수정할 수 있습니다.");
-    showToast("자기평가를 저장했습니다.");
-    await onSaved();
+    try {
+      const version = await saveForm("/api/inquiry/evaluation", { action: "saveSelf", roundId: data.round.id, ...sent.value, expectedVersion: sent.baseVersion });
+      draft.acknowledge(sent, version);
+      setMessage("자기평가를 저장했습니다. 평가가 열려 있는 동안 다시 수정할 수 있습니다.");
+      showToast("자기평가를 저장했습니다.");
+      try { await onSaved(); } catch { setError("저장은 완료했지만 최신 평가 상태를 불러오지 못했습니다. 잠시 뒤 다시 확인해 주세요."); }
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "자기평가를 저장하지 못했습니다.";
+      setError(text); showToast(text, "error");
+      if (cause instanceof FormSaveError && cause.status === 409) { try { await onSaved(); } catch { /* Keep the draft and offer another explicit attempt. */ } }
+    } finally { sending.current = false; setBusy(false); }
   }
 
+  if (!draft.ready) return <div className="empty-state">작성 내용을 확인하고 있어요.</div>;
+  if (!editable && !initial) return <div className="empty-state">제출한 자기평가가 없습니다.{draft.pending ? <p>미제출 초안은 이 탭에 보관되어 있습니다. 선생님이 평가를 다시 열면 이어서 작성할 수 있습니다.</p> : null}</div>;
   return (
     <form className="stack" onSubmit={submit}>
+      {editable && draft.conflict ? <FormConflict rows={[
+        ...data.round.template.items.map((item) => ({ label: item.prompt, mine: evaluationText(draft.value.responses, item.id), server: evaluationText(draft.server.responses, item.id) })),
+        ...data.round.template.selfReflectionQuestions.map((label, index) => ({ label, mine: draft.value.reflections[index], server: draft.server.reflections[index] })),
+      ]} onResolve={draft.resolve} /> : null}
+      {draft.warning ? <div className="warning-box" role="alert">{draft.warning}</div> : null}
+      {draft.pending ? <p className="save-state">{editable ? "저장하지 않은 작성 내용이 이 탭에 보관되어 있습니다." : "미제출 초안은 이 탭에 보관되어 있습니다. 아래는 서버에 제출한 내용입니다."}</p> : null}
       <div className="notice-box"><b>내 행동을 근거로 평가합니다.</b> 친분이나 결과의 성공 여부가 아니라 탐구 기간에 실제로 한 행동을 선택하세요.</div>
       {!editable ? <div className="warning-box">평가 입력이 마감되어 제출 내용을 읽기 전용으로 보여줍니다.</div> : null}
       {error ? <div className="error-box" role="alert">{error}</div> : null}
@@ -176,19 +211,27 @@ function SelfEvaluationForm({ data, onSaved }: { data: EvaluationData; onSaved: 
           </label>
         ))}
       </section>
-      {editable ? <button className="button" disabled={busy}>{busy ? "저장 중…" : initial ? "자기평가 수정 저장" : "자기평가 저장"}</button> : null}
+      {editable ? <button className="button" disabled={busy || draft.conflict}>{busy ? "저장 중…" : initial ? "자기평가 수정 저장" : "자기평가 저장"}</button> : null}
     </form>
   );
 }
 
-function PeerEvaluationForm({ data, teammate, onSaved }: { data: EvaluationData; teammate: EvaluationData["teammates"][number]; onSaved: () => Promise<void> }) {
+function PeerEvaluationForm({ data, teammate, draftKey, onSaved }: { data: EvaluationData; teammate: EvaluationData["teammates"][number]; draftKey: string; onSaved: () => Promise<void> }) {
   const { showToast } = useToast();
   const saved = data.peerEvaluations.find((evaluation) => evaluation.evaluateeId === teammate.id);
-  const [responses, setResponses] = useState<EvaluationResponse<PeerEvaluationValue>[]>(
-    saved?.responses.length ? saved.responses : emptyResponses(data.round.template.items, 3),
-  );
-  const [privateEvidence, setPrivateEvidence] = useState(saved?.privateEvidence ?? "");
-  const [publicComment, setPublicComment] = useState(saved?.publicComment ?? "");
+  const server: PeerDraft = { responses: saved?.responses.length ? saved.responses : emptyResponses(data.round.peerTemplate.items, 3), privateEvidence: saved?.privateEvidence ?? "", publicComment: saved?.publicComment ?? "" };
+  const draft = useFormDraft<PeerDraft>(draftKey, server, (value): value is PeerDraft => {
+    const candidate = value as PeerDraft | null;
+    return Boolean(candidate && validResponses(candidate.responses, data.round.peerTemplate.items, "unable_to_judge") &&
+      typeof candidate.privateEvidence === "string" && typeof candidate.publicComment === "string");
+  }, saved?.version ?? null);
+  const { responses, privateEvidence, publicComment } = data.round.status === "open" ? draft.value : server;
+  const { hydrate } = draft;
+  useEffect(() => { hydrate({ responses: saved?.responses.length ? saved.responses : emptyResponses(data.round.peerTemplate.items, 3), privateEvidence: saved?.privateEvidence ?? "", publicComment: saved?.publicComment ?? "" }, saved?.version ?? null); }, [saved, data.round.peerTemplate, hydrate]);
+  const setResponses = (update: (current: PeerDraft["responses"]) => PeerDraft["responses"]) => draft.change((current) => ({ ...current, responses: update(current.responses) }));
+  const setPrivateEvidence = (text: string) => draft.change((current) => ({ ...current, privateEvidence: text }));
+  const setPublicComment = (text: string) => draft.change((current) => ({ ...current, publicComment: text }));
+  const sending = useRef(false);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -206,33 +249,42 @@ function PeerEvaluationForm({ data, teammate, onSaved }: { data: EvaluationData;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (sending.current || !editable || !confirmed || !draft.ready || draft.conflict) return;
+    sending.current = true;
+    const sent = draft.capture();
     setBusy(true);
     setError("");
     setMessage("");
-    const response = await fetch("/api/inquiry/evaluation", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "savePeer", roundId: data.round.id, evaluateeId: teammate.id, responses, privateEvidence, publicComment, confirmed }),
-    });
-    const result = (await response.json()) as { message?: string };
-    setBusy(false);
-    if (!response.ok) {
-      const text = result.message ?? "동료평가를 저장하지 못했습니다.";
-      setError(text); showToast(text, "error"); return;
-    }
-    setMessage(`${teammate.name} 학생에 대한 평가를 저장했습니다.`);
-    showToast("동료평가를 저장했습니다.");
-    setConfirmed(false);
-    await onSaved();
+    try {
+      const version = await saveForm("/api/inquiry/evaluation", { action: "savePeer", roundId: data.round.id, evaluateeId: teammate.id, ...sent.value, confirmed, expectedVersion: sent.baseVersion });
+      draft.acknowledge(sent, version);
+      setMessage(`${teammate.name} 학생에 대한 평가를 저장했습니다.`);
+      showToast("동료평가를 저장했습니다.");
+      setConfirmed(false);
+      try { await onSaved(); } catch { setError("저장은 완료했지만 최신 평가 상태를 불러오지 못했습니다. 잠시 뒤 다시 확인해 주세요."); }
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "동료평가를 저장하지 못했습니다.";
+      setError(text); showToast(text, "error");
+      if (cause instanceof FormSaveError && cause.status === 409) { try { await onSaved(); } catch { /* Keep the draft. */ } }
+    } finally { sending.current = false; setBusy(false); }
   }
 
+  if (!draft.ready) return <div className="empty-state">작성 내용을 확인하고 있어요.</div>;
+  if (!editable && !saved) return <div className="empty-state">이 팀원에게 제출한 평가가 없습니다.{draft.pending ? <p>미제출 초안은 이 탭에 보관되어 있습니다. 선생님이 평가를 다시 열면 이어서 작성할 수 있습니다.</p> : null}</div>;
   return (
     <form className="stack peer-evaluation-form" onSubmit={submit}>
+      {editable && draft.conflict ? <FormConflict rows={[
+        ...data.round.peerTemplate.items.map((item) => ({ label: item.prompt, mine: evaluationText(draft.value.responses, item.id), server: evaluationText(draft.server.responses, item.id) })),
+        { label: "교사 확인용 관찰 근거", mine: draft.value.privateEvidence, server: draft.server.privateEvidence },
+        { label: "익명 의견", mine: draft.value.publicComment, server: draft.server.publicComment },
+      ]} onResolve={draft.resolve} /> : null}
+      {draft.warning ? <div className="warning-box" role="alert">{draft.warning}</div> : null}
+      {draft.pending ? <p className="save-state">{editable ? "저장하지 않은 작성 내용이 이 탭에 보관되어 있습니다." : "미제출 초안은 이 탭에 보관되어 있습니다. 아래는 서버에 제출한 내용입니다."}</p> : null}
       <div className="notice-box"><b>{teammate.name}</b> 학생과 친한 정도나 성격이 아니라, 탐구 기간에 직접 본 행동만 평가합니다. 볼 기회가 부족했다면 가운데 단계 대신 `판단하기 어려움`을 선택하세요.</div>
       {!editable ? <div className="warning-box">평가 입력이 마감되어 제출 내용을 읽기 전용으로 보여줍니다.</div> : null}
       {error ? <div className="error-box" role="alert">{error}</div> : null}
       {message ? <div className="notice-box">{message}</div> : null}
-      {data.round.template.items.map((item, index) => {
+      {data.round.peerTemplate.items.map((item, index) => {
         const current = responseFor(responses, item.id)!;
         return (
           <section className="evaluation-item" key={item.id}>
@@ -258,7 +310,7 @@ function PeerEvaluationForm({ data, teammate, onSaved }: { data: EvaluationData;
       {editable ? (
         <label className="evaluation-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} required /> 친분·성격·소문이 아니라 직접 본 행동만 평가했습니다.</label>
       ) : null}
-      {editable ? <button className="button" disabled={busy || !confirmed}>{busy ? "저장 중…" : saved ? "이 팀원 평가 수정 저장" : "이 팀원 평가 저장"}</button> : null}
+      {editable ? <button className="button" disabled={busy || !confirmed || draft.conflict}>{busy ? "저장 중…" : saved ? "이 팀원 평가 수정 저장" : "이 팀원 평가 저장"}</button> : null}
     </form>
   );
 }
@@ -284,7 +336,7 @@ function EvaluationResult({ data }: { data: EvaluationData }) {
       <section className="card card-body">
         <h2 className="section-heading">받은 동료평가</h2>
         <div className="evaluation-summary-list">
-          {data.round.template.items.map((item) => (
+          {data.round.peerTemplate.items.map((item) => (
             <div key={item.id}><b>{item.prompt}</b><span>{result.peerAverages[item.id] == null ? "교사 종합 피드백으로 제공" : `${result.peerAverages[item.id].toFixed(1)} / 4.0`}</span></div>
           ))}
         </div>
@@ -295,32 +347,46 @@ function EvaluationResult({ data }: { data: EvaluationData }) {
   );
 }
 
-export function EvaluationPanel() {
+export function EvaluationPanel({ teamId, currentUserId }: { teamId: string; currentUserId: string }) {
   const [data, setData] = useState<EvaluationData | null>(null);
   const [view, setView] = useState<View>("self");
   const [selectedTeammateId, setSelectedTeammateId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const sequence = useRef(0);
+  const active = useRef(false);
 
   const refresh = useCallback(async () => {
-    const response = await fetch("/api/inquiry/evaluation", { cache: "no-store" });
-    const result = (await response.json()) as { data?: EvaluationData | null; message?: string };
-    if (!response.ok) throw new Error(result.message ?? "평가를 불러오지 못했습니다.");
-    setData(result.data ?? null);
-    if (result.data?.round.status === "published") setView("result");
-    if (!selectedTeammateId && result.data?.teammates[0]) setSelectedTeammateId(result.data.teammates[0].id);
-  }, [selectedTeammateId]);
+    if (!active.current) return;
+    const request = ++sequence.current;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch(`/api/inquiry/evaluation?teamId=${encodeURIComponent(teamId)}`, { cache: "no-store", signal: controller.signal });
+      const result = (await response.json()) as { data?: EvaluationData | null; message?: string };
+      if (!active.current || request !== sequence.current) return;
+      if (!response.ok) throw new Error(result.message ?? "평가를 불러오지 못했습니다.");
+      setData(result.data ?? null);
+      setError("");
+      if (result.data?.round.status === "published") setView("result");
+      setSelectedTeammateId((selected) => result.data?.teammates.some((member) => member.id === selected) ? selected : result.data?.teammates[0]?.id ?? "");
+    } catch (cause) {
+      if (active.current && request === sequence.current) throw cause;
+    } finally { window.clearTimeout(timer); }
+  }, [teamId]);
 
   useEffect(() => {
-    let active = true;
-    void refresh().catch((cause: unknown) => active && setError(cause instanceof Error ? cause.message : "평가를 불러오지 못했습니다.")).finally(() => active && setLoading(false));
-    return () => { active = false; };
+    let mounted = true;
+    active.current = true;
+    void refresh().catch(() => mounted && setError("평가를 불러오지 못했습니다. 작성 초안은 보관되어 있습니다.")).finally(() => mounted && setLoading(false));
+    return () => { mounted = false; active.current = false; sequence.current++; };
   }, [refresh]);
 
   const teammate = useMemo(() => data?.teammates.find((member) => member.id === selectedTeammateId) ?? data?.teammates[0], [data, selectedTeammateId]);
   if (loading) return <div className="empty-state">평가 운영 상태를 확인하고 있어요.</div>;
-  if (error) return <div className="error-box">{error}</div>;
+  if (error) return <div className="error-box">{error}<button className="button secondary" onClick={() => { setLoading(true); void refresh().catch(() => setError("평가를 불러오지 못했습니다. 다시 시도해 주세요.")).finally(() => setLoading(false)); }}>다시 불러오기</button></div>;
   if (!data) return <div className="empty-state"><h2>아직 열린 평가가 없어요</h2><p>학기말에 선생님이 평가를 열면 자기평가와 팀원 평가를 작성할 수 있습니다.</p></div>;
+  const draftKey = `science-evaluation-draft:${currentUserId}:${teamId}:${data.round.id}`;
 
   return (
     <div className="stack evaluation-panel">
@@ -333,9 +399,9 @@ export function EvaluationPanel() {
         <button className={view === "peer" ? "active" : ""} onClick={() => setView("peer")}>팀원 평가 {data.peerEvaluations.length}/{data.teammates.length}</button>
         <button className={view === "result" ? "active" : ""} onClick={() => setView("result")}>받은 결과</button>
       </nav>
-      {view === "self" ? <SelfEvaluationForm key={`self-${data.selfEvaluation?.submittedAt ?? "new"}`} data={data} onSaved={refresh} /> : null}
+      {view === "self" ? <SelfEvaluationForm key={`${draftKey}:self`} draftKey={`${draftKey}:self`} data={data} onSaved={refresh} /> : null}
       {view === "peer" ? (
-        data.teammates.length ? <div className="stack"><div className="peer-selector">{data.teammates.map((member) => <button key={member.id} className={member.id === teammate?.id ? "active" : ""} onClick={() => setSelectedTeammateId(member.id)}>{member.name} {data.peerEvaluations.some((evaluation) => evaluation.evaluateeId === member.id) ? "✓" : ""}</button>)}</div>{teammate ? <PeerEvaluationForm key={`${teammate.id}-${data.peerEvaluations.find((evaluation) => evaluation.evaluateeId === teammate.id)?.submittedAt ?? "new"}`} data={data} teammate={teammate} onSaved={refresh} /> : null}</div> : <div className="empty-state">평가할 활성 팀원이 없습니다.</div>
+        data.teammates.length ? <div className="stack"><div className="peer-selector">{data.teammates.map((member) => <button key={member.id} className={member.id === teammate?.id ? "active" : ""} onClick={() => setSelectedTeammateId(member.id)}>{member.name} {data.peerEvaluations.some((evaluation) => evaluation.evaluateeId === member.id) ? "✓" : ""}</button>)}</div>{teammate ? <PeerEvaluationForm key={`${draftKey}:peer:${teammate.id}`} draftKey={`${draftKey}:peer:${teammate.id}`} data={data} teammate={teammate} onSaved={refresh} /> : null}</div> : <div className="empty-state">평가할 활성 팀원이 없습니다.</div>
       ) : null}
       {view === "result" ? <EvaluationResult data={data} /> : null}
     </div>

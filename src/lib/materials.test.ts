@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeMaterialLink } from "@/lib/material-links";
-import { materialTotal } from "@/lib/materials";
+import { materialTotal, resolveClubSheetTab } from "@/lib/materials";
 
 describe("materialTotal", () => {
   it("adds per-item quantity and per-row shipping exactly once", () => {
@@ -8,6 +8,20 @@ describe("materialTotal", () => {
       { name: "0.1 M HCl", specification: "500 mL", unitPrice: 12_000, quantity: 2, shipping: 3_000, link: "" },
       { name: "거름종이", specification: "100매", unitPrice: 4_500, quantity: 1, shipping: 0, link: "" },
     ])).toBe(31_500);
+  });
+});
+
+describe("resolveClubSheetTab", () => {
+  it("matches comma-separated club tabs by the name in parentheses", () => {
+    const tabs = ["석지우", "우수인", "홍린", "안현주"];
+    expect(resolveClubSheetTab("1조(석지우)", tabs)).toBe("석지우");
+    expect(resolveClubSheetTab("3조(우수인)", tabs)).toBe("우수인");
+    expect(resolveClubSheetTab("2조(홍린)", tabs)).toBe("홍린");
+    expect(resolveClubSheetTab("4조(안현주)", tabs)).toBe("안현주");
+  });
+
+  it("rejects a multiple-tab connection when no unique team tab matches", () => {
+    expect(() => resolveClubSheetTab("이름 없는 팀", ["가팀", "나팀"])).toThrow("일치하는 운영 탭");
   });
 });
 

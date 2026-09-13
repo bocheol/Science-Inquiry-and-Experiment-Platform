@@ -18,7 +18,7 @@ export default async function TeacherPage() {
       <main className="page-shell">
         <div className="page-title no-print">
           <div><h1>교사 대시보드</h1><p>과탐실과 동아리의 탐구 진척과 활동 기록을 한곳에서 확인합니다.</p></div>
-          <div className="toolbar-group"><a className="button secondary" href="/teacher/notices">공지 관리</a><a className="button secondary" href="/teacher/evaluations">자기·동료평가 관리</a><a className="button" href="/teacher/exams">시험 문제 관리</a><span className="badge">2026학년도</span></div>
+          <div className="toolbar-group">{user.isMaster ? <a className="button secondary" href="/teacher/master">마스터 계정 관리</a> : null}<a className="button secondary" href="/teacher/club-settings">동아리 운영 설정</a><a className="button secondary" href="/teacher/notices">공지 관리</a><a className="button secondary" href="/teacher/evaluations">자기·동료평가 관리</a><a className="button" href="/teacher/exams">시험 문제 관리</a><span className="badge">2026학년도</span></div>
         </div>
         <TeacherActivities classes={data} clubs={clubs} />
         <TeacherRequestBoard />

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default async function TeacherEvaluationsPage() {
   const user = await requireUser("teacher");
-  const data = await getEvaluationManagementData(9);
+  const data = await getEvaluationManagementData(9, undefined, user.id);
   return (
     <>
       <AppHeader name={user.name} role="teacher" />
@@ -16,7 +16,7 @@ export default async function TeacherEvaluationsPage() {
         <div className="page-title">
           <div><h1>자기평가·동료평가 관리</h1><p>행동 기준 4단계로 평가하고, 익명 의견을 교사가 검토한 뒤 학생에게 공개합니다.</p></div>
         </div>
-        <TeacherEvaluationManager initialData={data} />
+        <TeacherEvaluationManager initialData={data} currentUserId={user.id} />
       </main>
     </>
   );

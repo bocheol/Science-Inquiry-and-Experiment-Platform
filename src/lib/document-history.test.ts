@@ -1,9 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { getDb } from "@/lib/db";
-import { getDocumentHistory, restorePlanRevision, restoreReportRevision } from "@/lib/document-history";
+import { getDocumentHistory, recordPlanRevision, recordReportRevision, restorePlanRevision, restoreReportRevision } from "@/lib/document-history";
 import { createId } from "@/lib/id";
 import { savePlanField } from "@/lib/plan-service";
 import { saveReportField, saveReportMemberRole } from "@/lib/report-service";
+import { ensureInitialCycle } from "@/lib/inquiry-cycles";
 
 const leaderId = "history_current_leader";
 const memberId = "history_general_member";
@@ -27,14 +28,29 @@ beforeAll(async () => {
     [teamId, leaderId],
   );
   await db.query("INSERT INTO inquiry_sessions (id, team_id, stage) VALUES ($1, $2, 'PLANNING')", [sessionId, teamId]);
-  await db.query("INSERT INTO investigation_plans (id, session_id) VALUES ($1, $2)", [planId, sessionId]);
-  await db.query("INSERT INTO reports (id, session_id) VALUES ($1, $2)", [reportId, sessionId]);
+  const cycleId = await ensureInitialCycle(db, sessionId, "teacher_bootstrap");
+  await db.query("INSERT INTO investigation_plans (id, session_id, cycle_id) VALUES ($1, $2, $3)", [planId, sessionId, cycleId]);
+  await db.query("INSERT INTO reports (id, session_id, cycle_id) VALUES ($1, $2, $3)", [reportId, sessionId, cycleId]);
   for (const userId of [leaderId, memberId, formerLeaderId]) {
     await db.query("INSERT INTO team_members (id, team_id, user_id, status) VALUES ($1, $2, $3, 'active')", [createId("member"), teamId, userId]);
   }
 });
 
 describe("plan and report revision restore permissions", () => {
+  it.each(["plan", "report"] as const)("preserves teacher restoration of an archived team's active-cycle %s while rejecting its student leader", async kind => {
+    const db = await getDb(), documentId = kind === "plan" ? planId : reportId;
+    if (kind === "plan") await recordPlanRevision(db, documentId, "teacher_bootstrap", "archived_scope_source");
+    else await recordReportRevision(db, documentId, "teacher_bootstrap", "archived_scope_source");
+    const source = (await db.query("SELECT * FROM document_revisions WHERE document_id=$1 AND action='archived_scope_source'", [documentId])).rows[0];
+    const restore = (actor: string) => kind === "plan" ? restorePlanRevision(documentId, source.id, actor) : restoreReportRevision(documentId, source.id, actor);
+    try {
+      await db.query("UPDATE teams SET status='archived' WHERE id=$1", [teamId]);
+      await expect(restore(leaderId)).rejects.toThrow("현재 팀장");
+      await expect(restore("teacher_bootstrap")).resolves.toBeUndefined();
+      expect((await db.query("SELECT * FROM document_revisions WHERE id=$1", [source.id])).rows[0]).toEqual(source);
+    } finally { await db.query("UPDATE teams SET status='active' WHERE id=$1", [teamId]); }
+  });
+
   it("records plan changes and allows only the current leader or teacher to restore", async () => {
     await savePlanField(planId, "topic", "처음 주제", leaderId);
     await savePlanField(planId, "topic", "바뀐 주제", memberId);

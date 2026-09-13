@@ -4,11 +4,13 @@ import { audit, getDb } from "@/lib/db";
 import { createId } from "@/lib/id";
 import { generateTemporaryPassword } from "@/lib/passwords";
 import type { IssuedCredential } from "@/lib/roster";
+import { lockStudentTeams } from "@/lib/team-mutation-locks";
+import { UserFacingError } from "@/lib/user-facing-error";
 
 export function parseStudentLoginId(loginId: string) {
   const normalized = loginId.trim();
   const match = /^1(0[1-9])(0[1-9]|[1-9][0-9])$/.exec(normalized);
-  if (!match) throw new Error("학번은 1학년·1~9반·1~99번에 맞는 5자리로 입력해 주세요.");
+  if (!match) throw new UserFacingError("학번은 1학년·1~9반·1~99번에 맞는 5자리로 입력해 주세요.");
   return {
     loginId: normalized,
     classNumber: Number(match[1]),
@@ -22,7 +24,7 @@ export async function addStudent(
 ): Promise<IssuedCredential> {
   const parsed = parseStudentLoginId(input.loginId);
   const name = input.name.trim();
-  if (!name || name.length > 80) throw new Error("학생 이름을 1자 이상 80자 이하로 입력해 주세요.");
+  if (!name || name.length > 80) throw new UserFacingError("학생 이름을 1자 이상 80자 이하로 입력해 주세요.");
 
   const db = await getDb();
   const existing = await db.query<{ status: string }>(
@@ -30,13 +32,13 @@ export async function addStudent(
     [ACADEMIC_YEAR, parsed.loginId],
   );
   if (existing.rows[0]?.status === "inactive") {
-    throw new Error("비활성 학생 목록에 같은 학번이 있습니다. 해당 계정을 복원해 주세요.");
+    throw new UserFacingError("비활성 학생 목록에 같은 학번이 있습니다. 해당 계정을 복원해 주세요.");
   }
-  if (existing.rows[0]) throw new Error("이미 등록된 학번입니다.");
+  if (existing.rows[0]) throw new UserFacingError("이미 등록된 학번입니다.");
 
   const classId = `class_${ACADEMIC_YEAR}_${parsed.classNumber}`;
   const classRow = await db.query("SELECT id FROM classes WHERE id = $1", [classId]);
-  if (!classRow.rows[0]) throw new Error("학급을 찾을 수 없습니다.");
+  if (!classRow.rows[0]) throw new UserFacingError("학급을 찾을 수 없습니다.");
 
   const temporaryPassword = generateTemporaryPassword();
   const studentId = createId("user");
@@ -56,22 +58,31 @@ export async function addStudent(
 export async function deactivateStudent(actorId: string, studentId: string) {
   const db = await getDb();
   const student = await db.query<{ status: string }>(
-    "SELECT status FROM users WHERE id = $1 AND role = 'student'",
-    [studentId],
+    "SELECT status FROM users WHERE id = $1 AND role = 'student' AND academic_year = $2",
+    [studentId, ACADEMIC_YEAR],
   );
-  if (!student.rows[0]) throw new Error("학생을 찾을 수 없습니다.");
-  if (student.rows[0].status === "inactive") throw new Error("이미 비활성화된 학생입니다.");
+  if (!student.rows[0]) throw new UserFacingError("학생을 찾을 수 없습니다.");
+  if (student.rows[0].status === "inactive") throw new UserFacingError("이미 비활성화된 학생입니다.");
 
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    await client.query("UPDATE users SET status = 'inactive' WHERE id = $1 AND role = 'student'", [studentId]);
+    await lockStudentTeams(client, studentId);
+    const changed = await client.query(
+      "UPDATE users SET status = 'inactive', session_version = session_version + 1 WHERE id = $1 AND role = 'student' AND academic_year = $2 RETURNING id",
+      [studentId, ACADEMIC_YEAR],
+    );
+    if (changed.rowCount !== 1) throw new UserFacingError("현재 학년도의 학생만 변경할 수 있습니다.");
     await client.query(
       `UPDATE team_members SET status = 'inactive', left_at = CURRENT_TIMESTAMP
-        WHERE user_id = $1 AND status = 'active'`,
-      [studentId],
+        WHERE user_id = $1 AND status = 'active'
+          AND team_id IN (SELECT t.id FROM teams t LEFT JOIN classes c ON c.id = t.class_id
+            LEFT JOIN clubs cl ON cl.id = t.club_id WHERE COALESCE(c.academic_year, cl.academic_year) = $2)`,
+      [studentId, ACADEMIC_YEAR],
     );
-    await client.query("UPDATE teams SET leader_user_id = NULL WHERE leader_user_id = $1", [studentId]);
+    await client.query(`UPDATE teams SET leader_user_id = NULL WHERE leader_user_id = $1
+      AND id IN (SELECT t.id FROM teams t LEFT JOIN classes c ON c.id = t.class_id
+        LEFT JOIN clubs cl ON cl.id = t.club_id WHERE COALESCE(c.academic_year, cl.academic_year) = $2)`, [studentId, ACADEMIC_YEAR]);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -86,10 +97,10 @@ export async function restoreStudent(actorId: string, studentId: string) {
   const db = await getDb();
   const result = await db.query(
     `UPDATE users SET status = 'active'
-      WHERE id = $1 AND role = 'student' AND status = 'inactive'
+      WHERE id = $1 AND role = 'student' AND status = 'inactive' AND academic_year = $2
       RETURNING id`,
-    [studentId],
+    [studentId, ACADEMIC_YEAR],
   );
-  if (result.rowCount !== 1) throw new Error("복원할 비활성 학생을 찾을 수 없습니다.");
+  if (result.rowCount !== 1) throw new UserFacingError("복원할 비활성 학생을 찾을 수 없습니다.");
   await audit(actorId, "student_account_restored", "user", studentId);
 }

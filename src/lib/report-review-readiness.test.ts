@@ -1,0 +1,52 @@
+import { expect, it, vi } from "vitest";
+import { getDb } from "@/lib/db";
+import { ensureInitialCycle } from "@/lib/inquiry-cycles";
+import { getInquiryDataForTeam } from "@/lib/inquiry-data";
+import { REPORT_FIELDS } from "@/lib/constants";
+import { saveReportField, submitReport } from "@/lib/report-service";
+import { POST } from "@/app/api/teacher/reports/review/route";
+
+vi.mock("@/lib/auth", () => ({ getCurrentUser: async () => ({ id: "teacher_bootstrap", role: "teacher", mustChangePassword: false }) }));
+vi.mock("@/lib/push-notifications", () => ({ sendPushForNotice: vi.fn() }));
+
+it("requires the viewed report state and rejects stale reviews while allowing feedback resend", async () => {
+  const db = await getDb(), id = "report_review_guard";
+  await db.query("INSERT INTO teams (id, class_id, team_number, name) VALUES ($1, 'class_2026_9', 190, '합성 보고서 검토팀')", [id]);
+  await db.query("INSERT INTO team_members (id, team_id, user_id) VALUES ($1, $1, 'demo_student_1')", [id]);
+  await db.query("INSERT INTO inquiry_sessions (id, team_id, stage) VALUES ($1, $1, 'REPORTING')", [id]);
+  const cycleId = await ensureInitialCycle(db, id, "teacher_bootstrap");
+  await db.query("INSERT INTO investigation_plans (id, session_id, cycle_id, review_status) VALUES ($1, $1, $2, 'approved')", [id, cycleId]);
+  const form = Object.fromEntries(["title", ...REPORT_FIELDS.map(f => f.key)].map(key => [key, "합성 보고서 내용"]));
+  await db.query("INSERT INTO reports (id, session_id, cycle_id, form_data) VALUES ($1, $1, $2, $3)", [id, cycleId, JSON.stringify(form)]);
+  await db.query("INSERT INTO report_member_roles (report_id, user_id, role_description) VALUES ($1, 'demo_student_1', '합성 역할')", [id]);
+  await submitReport(id, "demo_student_1", cycleId);
+  const viewed = async () => {
+    const data = (await getInquiryDataForTeam(id))!;
+    return {cycleId: data.session.cycle!.id, version: data.report.reviewVersion, status: data.report.status, feedback: data.report.teacherFeedback ?? ""};
+  };
+  const request = (expected?: unknown, decision = "feedback", feedback = "측정 기준을 보완하세요.") => POST(new Request("http://localhost/api/teacher/reports/review", { method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify({action:"review", reportId:id, decision, feedback, expected}) }));
+  expect((await request()).status).toBe(400);
+  const first = await viewed();
+  expect((await request(first)).status).toBe(200);
+  const afterFirst = await viewed();
+  expect((await request(first, "reviewed", "")).status).toBe(400);
+  expect(await viewed()).toEqual(afterFirst);
+  expect((await request(afterFirst, "reviewed", "")).status).toBe(400);
+  expect((await request(afterFirst, "feedback", "측정 기준과 반복 횟수를 보완하세요.")).status).toBe(200);
+  const beforeResubmit = await viewed();
+  await saveReportField(id, "analysis", "학생이 다시 작성한 분석", "demo_student_1", undefined, cycleId);
+  await submitReport(id, "demo_student_1", cycleId);
+  const current = await viewed();
+  expect((await request(beforeResubmit)).status).toBe(400);
+  expect((await request({...current, cycleId:"previous-cycle"})).status).toBe(400);
+  expect(await viewed()).toEqual(current);
+  expect((await request(current, "reviewed", "")).status).toBe(200);
+  await submitReport(id, "demo_student_1", cycleId);
+  const sameContent = await viewed();
+  await submitReport(id, "demo_student_1", cycleId);
+  const resubmitted = await viewed();
+  expect(resubmitted).toEqual({...sameContent, version: sameContent.version + 1});
+  const historyBefore = (await db.query("SELECT id FROM document_revisions WHERE document_type = 'report' AND document_id = $1", [id])).rows;
+  expect((await request(sameContent, "reviewed", "")).status).toBe(400);
+  expect((await db.query("SELECT id FROM document_revisions WHERE document_type = 'report' AND document_id = $1", [id])).rows).toEqual(historyBefore);
+});

@@ -5,6 +5,10 @@ export type AiFeature =
   | "topic_suggestions"
   | "team_chat"
   | "team_research"
+  | "plan_review_student"
+  | "plan_review_teacher"
+  | "cycle_analysis_intermediate"
+  | "cycle_analysis_final"
   | "exam_common"
   | "exam_team";
 
@@ -18,6 +22,10 @@ const FEATURE_DEFAULTS: Record<AiFeature, { envName: string; model: string }> = 
   topic_suggestions: { envName: "OPENAI_TOPIC_MODEL", model: "gpt-5.6-terra" },
   team_chat: { envName: "OPENAI_TEAM_CHAT_MODEL", model: "gpt-5.6-luna" },
   team_research: { envName: "OPENAI_TEAM_RESEARCH_MODEL", model: "gpt-5.6-terra" },
+  plan_review_student: { envName: "OPENAI_PLAN_REVIEW_MODEL", model: "gpt-5.6-terra" },
+  plan_review_teacher: { envName: "OPENAI_PLAN_REVIEW_MODEL", model: "gpt-5.6-sol" },
+  cycle_analysis_intermediate: { envName: "OPENAI_CYCLE_ANALYSIS_MODEL", model: "gpt-5.6-sol" },
+  cycle_analysis_final: { envName: "OPENAI_CYCLE_ANALYSIS_MODEL", model: "gpt-5.6-sol" },
   exam_common: { envName: "OPENAI_EXAM_MODEL", model: "gpt-5.6-sol" },
   exam_team: { envName: "OPENAI_EXAM_MODEL", model: "gpt-5.6-sol" },
 };

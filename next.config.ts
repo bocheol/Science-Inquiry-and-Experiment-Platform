@@ -3,6 +3,11 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  serverExternalPackages: ["xlsx"],
+  // The upload worker loads SheetJS through native require, outside Next's bundle.
+  outputFileTracingIncludes: {
+    "/api/teacher/roster": ["./node_modules/xlsx/**/*"],
+  },
   async headers() {
     const privateNoStore = [
       {

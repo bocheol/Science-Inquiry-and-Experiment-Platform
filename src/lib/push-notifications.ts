@@ -1,8 +1,12 @@
 import webpush, { type PushSubscription, type RequestOptions } from "web-push";
+import { isIP, type LookupFunction } from "node:net";
+import { Agent } from "node:https";
+import { lookup } from "node:dns/promises";
 import { ACADEMIC_YEAR } from "@/lib/constants";
 import { audit, getDb } from "@/lib/db";
 import { createId } from "@/lib/id";
 import type { SessionUser } from "@/lib/types";
+import { UserFacingError } from "@/lib/user-facing-error";
 
 export type PushSubscriptionInput = {
   endpoint: string;
@@ -19,10 +23,106 @@ export type PushDeliverySummary = {
 };
 
 type StoredPushSubscription = PushSubscription & { id: string };
-type PushSender = (subscription: PushSubscription, payload: string, options: RequestOptions) => Promise<unknown>;
+export type PushSender = (subscription: PushSubscription, payload: string, options: RequestOptions) => Promise<unknown>;
+export class UnsafePushDestinationError extends UserFacingError {}
 
 function assertStudent(actor: Pick<SessionUser, "role">) {
-  if (actor.role !== "student") throw new Error("학생만 기기 알림을 설정할 수 있습니다.");
+  if (actor.role !== "student") throw new UserFacingError("학생만 기기 알림을 설정할 수 있습니다.");
+}
+
+function isPrivateIpv4(hostname: string) {
+  const octets = hostname.split(".").map(Number);
+  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [a, b] = octets;
+  return a === 0
+    || a === 10
+    || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 0)
+    || (a === 192 && b === 2)
+    || (a === 192 && b === 168)
+    || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51)
+    || (a === 203 && b === 0)
+    || a >= 224;
+}
+
+function isPrivateIpv6(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  if (normalized === "::" || normalized === "::1") return true;
+  if (normalized.startsWith("fc") || normalized.startsWith("fd") || /^fe[89a-f]/.test(normalized) || normalized.startsWith("ff")) return true;
+  if (normalized.startsWith("::ffff:")) return true;
+  return false;
+}
+
+export function isSafePushEndpoint(endpoint: string) {
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== "https:" || url.username || url.password || url.hash) return false;
+    const hostname = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+    if (!hostname || hostname === "localhost") return false;
+    if ([".localhost", ".local", ".internal", ".home", ".lan"].some((suffix) => hostname.endsWith(suffix))) return false;
+    const ipVersion = isIP(hostname);
+    if (ipVersion === 4) return !isPrivateIpv4(hostname);
+    if (ipVersion === 6) return !isPrivateIpv6(hostname);
+    return hostname.includes(".");
+  } catch {
+    return false;
+  }
+}
+
+export function assertSafePushEndpoint(endpoint: string) {
+  if (!isSafePushEndpoint(endpoint)) throw new UnsafePushDestinationError("안전한 기기 알림 주소가 아닙니다.");
+}
+
+type AddressResolver = (hostname: string) => Promise<string[]>;
+
+async function resolveAddresses(hostname: string) {
+  return (await lookup(hostname, { all: true, verbatim: true })).map((record) => record.address);
+}
+
+export async function assertSafePushDestination(endpoint: string, resolver: AddressResolver = resolveAddresses) {
+  assertSafePushEndpoint(endpoint);
+  const hostname = new URL(endpoint).hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  if (isIP(hostname)) return;
+  // Reserved example domains are used only by isolated regression fixtures.
+  if (resolver === resolveAddresses && process.env.NODE_ENV === "test" && (hostname === "example" || hostname.endsWith(".example"))) return;
+  let addresses: string[];
+  try {
+    addresses = await resolver(hostname);
+  } catch {
+    throw new UserFacingError("기기 알림 주소를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+  }
+  if (!addresses.length) throw new UserFacingError("기기 알림 주소를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+  if (addresses.some((address) => {
+    const version = isIP(address);
+    return version === 4 ? isPrivateIpv4(address) : version === 6 ? isPrivateIpv6(address) : true;
+  })) {
+    throw new UnsafePushDestinationError("안전한 기기 알림 주소가 아닙니다.");
+  }
+}
+
+export function createSafePushAgent(endpoint: string, resolver: AddressResolver = resolveAddresses) {
+  assertSafePushEndpoint(endpoint);
+  const normalize = (host: string) => host.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  const expectedHost = normalize(new URL(endpoint).hostname);
+  const guardedLookup: LookupFunction = (hostname, options, callback) => {
+    void (async () => {
+      if (normalize(hostname) !== expectedHost) throw new UnsafePushDestinationError("기기 알림 연결 대상이 변경되었습니다.");
+      const addresses = await resolver(hostname);
+      // Validate this exact DNS result and pass it directly to the socket. A
+      // separate validation lookup would allow a second, unchecked DNS answer.
+      await assertSafePushDestination(endpoint, async () => addresses);
+      const family = Number(options.family) || 0;
+      const candidates = addresses.map(address => ({ address, family: isIP(address) })).filter(row => !family || row.family === family);
+      if (!candidates.length) throw new UserFacingError("기기 알림 연결 주소를 확인할 수 없습니다.");
+      if (options.all) callback(null, candidates);
+      else callback(null, candidates[0].address, candidates[0].family);
+    })().catch(error => callback(error instanceof Error ? error : new Error("기기 알림 연결 주소를 확인할 수 없습니다."), ""));
+  };
+  return new Agent({ keepAlive: false, maxSockets: 1, lookup: guardedLookup });
 }
 
 export function getPushPublicConfiguration() {
@@ -32,7 +132,7 @@ export function getPushPublicConfiguration() {
   return { configured: Boolean(publicKey && privateKey && subject), publicKey };
 }
 
-function getVapidDetails() {
+export function getVapidDetails() {
   const publicKey = process.env.VAPID_PUBLIC_KEY?.trim();
   const privateKey = process.env.VAPID_PRIVATE_KEY?.trim();
   const subject = process.env.VAPID_SUBJECT?.trim();
@@ -46,6 +146,7 @@ export async function savePushSubscription(
   userAgent = "",
 ) {
   assertStudent(actor);
+  await assertSafePushDestination(subscription.endpoint);
   const db = await getDb();
   const existing = await db.query<{ user_id: string }>(
     "SELECT user_id FROM push_subscriptions WHERE endpoint = $1",
@@ -92,7 +193,7 @@ async function getNoticeSubscriptions(noticeId: string) {
     `SELECT DISTINCT ps.id, ps.endpoint, ps.p256dh, ps.auth,
             n.kind, n.priority, n.action_path
        FROM notices n
-       JOIN users u ON u.role = 'student' AND u.status = 'active' AND u.academic_year = $2
+         JOIN users u ON u.role = 'student' AND u.status = 'active' AND u.academic_year = $2 AND u.account_type = 'standard'
        JOIN push_subscriptions ps ON ps.user_id = u.id
        LEFT JOIN team_members tm
          ON tm.user_id = u.id AND tm.team_id = n.team_id AND tm.status = 'active'
@@ -149,12 +250,20 @@ async function deliverPushForNotice(noticeId: string, senderOverride?: PushSende
   for (let offset = 0; offset < rows.length; offset += 20) {
     const batch = rows.slice(offset, offset + 20);
     await Promise.all(batch.map(async (row) => {
+      try {
+        await assertSafePushDestination(row.endpoint);
+      } catch (error) {
+        failed += 1;
+        if (error instanceof UnsafePushDestinationError) await db.query("DELETE FROM push_subscriptions WHERE id = $1", [row.id]);
+        return;
+      }
       const subscription: StoredPushSubscription = {
         id: row.id,
         endpoint: row.endpoint,
         keys: { p256dh: row.p256dh, auth: row.auth },
       };
       const options: RequestOptions = {
+        agent: createSafePushAgent(row.endpoint),
         TTL: row.priority === "important" ? 7 * 24 * 60 * 60 : 24 * 60 * 60,
         urgency: row.priority === "important" ? "high" : "normal",
         topic: noticeId.replace(/[^A-Za-z0-9_-]/g, "").slice(-32) || "science-inquiry-notice",
@@ -169,8 +278,9 @@ async function deliverPushForNotice(noticeId: string, senderOverride?: PushSende
         );
       } catch (error) {
         const status = errorStatus(error);
-        if (status === 404 || status === 410) {
-          expired += 1;
+        if (status === 404 || status === 410 || error instanceof UnsafePushDestinationError) {
+          if (error instanceof UnsafePushDestinationError) failed += 1;
+          else expired += 1;
           await db.query("DELETE FROM push_subscriptions WHERE id = $1", [row.id]);
         } else {
           failed += 1;
@@ -179,7 +289,7 @@ async function deliverPushForNotice(noticeId: string, senderOverride?: PushSende
             [row.id],
           );
         }
-      }
+      } finally { options.agent?.destroy(); }
     }));
   }
 

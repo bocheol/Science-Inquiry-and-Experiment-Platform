@@ -1,6 +1,7 @@
 import { audit, getDb } from "@/lib/db";
 import { createId } from "@/lib/id";
 import type { SessionUser } from "@/lib/types";
+import { UserFacingError } from "@/lib/user-facing-error";
 
 export const TEACHER_REQUEST_CATEGORIES = ["feature", "bug", "question", "other"] as const;
 export const TEACHER_REQUEST_STATUSES = ["received", "reviewing", "planned", "resolved"] as const;
@@ -27,12 +28,12 @@ export function containsRestrictedTeacherRequestData(value: string) {
 }
 
 function assertTeacher(actor: Pick<SessionUser, "role">) {
-  if (actor.role !== "teacher") throw new Error("권한이 없습니다.");
+  if (actor.role !== "teacher") throw new UserFacingError("권한이 없습니다.");
 }
 
 function assertSafeText(title: string, content: string) {
   if (containsRestrictedTeacherRequestData(`${title}\n${content}`)) {
-    throw new Error("학생 개인정보·학번·비밀번호·학생 자료는 게시판에 입력할 수 없습니다. 해당 내용을 제거해 주세요.");
+    throw new UserFacingError("학생 개인정보·학번·비밀번호·학생 자료는 게시판에 입력할 수 없습니다. 해당 내용을 제거해 주세요.");
   }
 }
 
@@ -95,6 +96,6 @@ export async function updateTeacherRequestStatus(actor: SessionUser, requestId: 
       WHERE id = $2 RETURNING id`,
     [status, requestId],
   );
-  if (!result.rows[0]) throw new Error("건의·문의 글을 찾을 수 없습니다.");
+  if (!result.rows[0]) throw new UserFacingError("건의·문의 글을 찾을 수 없습니다.");
   await audit(actor.id, "teacher_request_status_updated", "teacher_request", requestId, { status });
 }

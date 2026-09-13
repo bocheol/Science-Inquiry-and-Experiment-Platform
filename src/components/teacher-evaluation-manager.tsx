@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { EvaluationItem, EvaluationManagementData } from "@/lib/evaluation-service";
 import { useToast } from "@/components/toast-provider";
+import { FormConflict } from "@/components/form-conflict";
+import { FormSaveError, saveForm, useFormDraft } from "@/components/use-form-draft";
 
 const statusLabels: Record<string, string> = {
   draft: "설정 중",
@@ -19,16 +21,123 @@ const flagLabels: Record<string, string> = {
   suspect_language: "부적절 표현 의심",
 };
 
-export function TeacherEvaluationManager({ initialData }: { initialData: EvaluationManagementData }) {
+type SelectedEvaluation = NonNullable<EvaluationManagementData["selected"]>;
+type ManagedPeerEvaluation = SelectedEvaluation["peerEvaluations"][number];
+type ManagedStudent = SelectedEvaluation["progress"][number];
+type TextDraft = { text: string };
+const validTextDraft = (value: unknown): value is TextDraft => Boolean(value && typeof value === "object" && typeof (value as TextDraft).text === "string");
+
+function hasUnsavedTeacherDraft(currentUserId: string, roundId: string) {
+  const prefix = `science-teacher-evaluation:${currentUserId}:${roundId}:`;
+  try {
+    for (let index = 0; index < sessionStorage.length; index += 1) {
+      if (sessionStorage.key(index)?.startsWith(prefix)) return true;
+    }
+  } catch { /* Editors show their own warning when recovery storage is unavailable. */ }
+  return false;
+}
+
+function CommentDecisionEditor({ currentUserId, roundId, roundStatus, evaluation, onSaved }: {
+  currentUserId: string;
+  roundId: string;
+  roundStatus: SelectedEvaluation["status"];
+  evaluation: ManagedPeerEvaluation;
+  onSaved: () => Promise<void>;
+}) {
+  const { showToast } = useToast();
+  const initial = { text: evaluation.redactedPublicComment || evaluation.publicComment };
+  const draft = useFormDraft<TextDraft>(`science-teacher-evaluation:${currentUserId}:${roundId}:comment:${evaluation.id}`, initial, validTextDraft, evaluation.version);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const { hydrate } = draft;
+  useEffect(() => { hydrate(initial, evaluation.version); }, [evaluation.redactedPublicComment, evaluation.publicComment, evaluation.version, hydrate]);
+
+  async function decide(status: "approved" | "hidden") {
+    if (busy || draft.conflict || roundStatus === "published") return;
+    if (status === "hidden") draft.change({ text: "" });
+    const sent = draft.capture();
+    setBusy(true); setError("");
+    try {
+      const version = await saveForm("/api/teacher/evaluations", {
+        action: "reviewComment", evaluationId: evaluation.id, expectedVersion: sent.baseVersion,
+        status, redactedPublicComment: status === "approved" ? sent.value.text : "",
+      });
+      draft.acknowledge(sent, version);
+      const message = status === "approved" ? "익명 의견을 공개 승인했습니다." : "익명 의견을 숨겼습니다.";
+      showToast(message);
+      await onSaved();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "익명 의견을 저장하지 못했습니다.";
+      setError(message); showToast(message, "error");
+      if (cause instanceof FormSaveError && cause.status === 409) await onSaved().catch(() => undefined);
+    } finally { setBusy(false); }
+  }
+
+  if (!draft.ready) return <div className="empty-state">의견 초안을 확인하고 있어요.</div>;
+  return <div className="stack">
+    {draft.conflict ? <FormConflict rows={[{ label: "학생에게 공개할 문장", mine: draft.value.text, server: draft.server.text }]} onResolve={draft.resolve} /> : null}
+    {draft.warning ? <div className="warning-box" role="alert">{draft.warning}</div> : null}
+    {draft.pending ? <p className="save-state">저장하지 않은 검토 문장이 이 탭에 보관되어 있습니다.</p> : null}
+    {error ? <div className="error-box" role="alert">{error}</div> : null}
+    <label className="field"><span>학생에게 공개할 문장</span><textarea className="textarea compact" maxLength={200} disabled={roundStatus === "published"} value={draft.value.text} onChange={(event) => draft.change({ text: event.target.value })} /></label>
+    {roundStatus !== "published" ? <div className="toolbar-group"><button className="button" disabled={busy || draft.conflict} onClick={() => void decide("approved")}>원문/최소 가림 승인</button><button className="button danger" disabled={busy || draft.conflict} onClick={() => void decide("hidden")}>숨김</button></div> : null}
+  </div>;
+}
+
+function TeacherSummaryEditor({ currentUserId, roundId, roundStatus, student, onSaved }: {
+  currentUserId: string;
+  roundId: string;
+  roundStatus: SelectedEvaluation["status"];
+  student: ManagedStudent;
+  onSaved: () => Promise<void>;
+}) {
+  const { showToast } = useToast();
+  const initial = { text: student.teacherSummary };
+  const draft = useFormDraft<TextDraft>(`science-teacher-evaluation:${currentUserId}:${roundId}:summary:${student.studentId}`, initial, validTextDraft, student.teacherSummaryVersion);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const { hydrate } = draft;
+  useEffect(() => { hydrate(initial, student.teacherSummaryVersion); }, [student.teacherSummary, student.teacherSummaryVersion, hydrate]);
+
+  async function save() {
+    if (busy || draft.conflict || roundStatus === "published") return;
+    const sent = draft.capture();
+    setBusy(true); setError("");
+    try {
+      const version = await saveForm("/api/teacher/evaluations", {
+        action: "saveSummary", roundId, studentId: student.studentId,
+        teacherSummary: sent.value.text, expectedVersion: sent.baseVersion,
+      });
+      draft.acknowledge(sent, version);
+      const message = `${student.name} 학생의 종합 피드백을 저장했습니다.`;
+      showToast(message);
+      await onSaved();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "종합 피드백을 저장하지 못했습니다.";
+      setError(message); showToast(message, "error");
+      if (cause instanceof FormSaveError && cause.status === 409) await onSaved().catch(() => undefined);
+    } finally { setBusy(false); }
+  }
+
+  if (!draft.ready) return <div className="empty-state">피드백 초안을 확인하고 있어요.</div>;
+  return <article className={`summary-editor ${!student.disclosureEligible ? "required-summary" : ""}`}>
+    {draft.conflict ? <FormConflict rows={[{ label: `${student.name} 학생 종합 피드백`, mine: draft.value.text, server: draft.server.text }]} onResolve={draft.resolve} /> : null}
+    {draft.warning ? <div className="warning-box" role="alert">{draft.warning}</div> : null}
+    {draft.pending ? <p className="save-state">저장하지 않은 종합 피드백이 이 탭에 보관되어 있습니다.</p> : null}
+    {error ? <div className="error-box" role="alert">{error}</div> : null}
+    <label className="field"><span>{student.teamName} · {student.name} {!student.disclosureEligible ? <b>필수</b> : <small>선택</small>}</span><textarea className="textarea compact" maxLength={2_000} disabled={roundStatus === "published"} value={draft.value.text} onChange={(event) => draft.change({ text: event.target.value })} /></label>
+    {roundStatus !== "published" ? <button className="button secondary" disabled={busy || draft.conflict} onClick={() => void save()}>{busy ? "저장 중…" : "피드백 저장"}</button> : null}
+  </article>;
+}
+
+export function TeacherEvaluationManager({ initialData, currentUserId }: { initialData: EvaluationManagementData; currentUserId: string }) {
   const { showToast } = useToast();
   const [data, setData] = useState(initialData);
-  const [classNumber, setClassNumber] = useState(initialData.classNumber);
+  const [scopeKey, setScopeKey] = useState(initialData.clubId ? `club:${initialData.clubId}` : `class:${initialData.classNumber ?? 9}`);
   const [selectedRoundId, setSelectedRoundId] = useState(initialData.selected?.id ?? "");
   const [title, setTitle] = useState(initialData.selected?.title ?? "2026학년도 과학 탐구 자기·동료평가");
   const [items, setItems] = useState<EvaluationItem[]>(initialData.selected?.template.items ?? []);
   const [optionalItem, setOptionalItem] = useState<"none" | "safety" | "theory">("none");
-  const [redactions, setRedactions] = useState<Record<string, string>>({});
-  const [summaries, setSummaries] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -38,15 +147,14 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
     if (!selected) return;
     setTitle(selected.title);
     setItems(selected.template.items);
-    setRedactions(Object.fromEntries(selected.peerEvaluations.map((evaluation) => [evaluation.id, evaluation.redactedPublicComment || evaluation.publicComment])));
-    setSummaries(Object.fromEntries(selected.progress.map((student) => [student.studentId, student.teacherSummary])));
   }, [selected]);
 
   const pendingComments = useMemo(() => selected?.peerEvaluations.filter((evaluation) => evaluation.publicComment && evaluation.commentReviewStatus === "pending").length ?? 0, [selected]);
   const incompleteStudents = useMemo(() => selected?.progress.filter((student) => !student.selfSubmitted || student.peerSubmitted < student.peerExpected).length ?? 0, [selected]);
 
-  async function refresh(nextClassNumber = classNumber, roundId = selectedRoundId) {
-    const params = new URLSearchParams({ classNumber: String(nextClassNumber) });
+  async function refresh(nextScopeKey = scopeKey, roundId = selectedRoundId) {
+    const [scope, value] = nextScopeKey.split(":", 2);
+    const params = new URLSearchParams(scope === "club" ? { clubId: value } : { classNumber: value });
     if (roundId) params.set("roundId", roundId);
     const response = await fetch(`/api/teacher/evaluations?${params}`, { cache: "no-store" });
     const result = (await response.json()) as EvaluationManagementData & { message?: string };
@@ -56,6 +164,11 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
   }
 
   async function action(body: Record<string, unknown>, successMessage: string) {
+    if (body.action === "publish" && selected && hasUnsavedTeacherDraft(currentUserId, selected.id)) {
+      const text = "저장하지 않은 검토 문장이나 종합 피드백이 있습니다. 각 저장 버튼을 누른 뒤 결과를 공개해 주세요.";
+      setError(text); showToast(text, "error");
+      return;
+    }
     setBusy(true);
     setError("");
     setMessage("");
@@ -71,7 +184,7 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
       setSelectedRoundId(roundId);
       setMessage(successMessage);
       showToast(successMessage);
-      await refresh(classNumber, roundId);
+      await refresh(scopeKey, roundId);
     } catch (cause) {
       const text = cause instanceof Error ? cause.message : "평가를 처리하지 못했습니다.";
       setError(text); showToast(text, "error");
@@ -80,8 +193,8 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
     }
   }
 
-  async function changeClass(value: number) {
-    setClassNumber(value);
+  async function changeScope(value: string) {
+    setScopeKey(value);
     setSelectedRoundId("");
     setError("");
     setMessage("");
@@ -109,12 +222,13 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
         <div className="toolbar">
           <div><h2 className="section-heading">평가 회차</h2><p className="section-subtitle">학급별로 평가를 열고, 의견을 모두 검토한 뒤 결과를 공개합니다.</p></div>
           <div className="toolbar-group">
-            <label className="label" htmlFor="evaluationClass">학급</label>
-            <select id="evaluationClass" className="select" value={classNumber} onChange={(event) => void changeClass(Number(event.target.value))} disabled={busy}>
-              {Array.from({ length: 9 }, (_, index) => index + 1).map((number) => <option key={number} value={number}>{number}반</option>)}
+            <label className="label" htmlFor="evaluationClass">운영 대상</label>
+            <select id="evaluationClass" className="select" value={scopeKey} onChange={(event) => void changeScope(event.target.value)} disabled={busy}>
+              {Array.from({ length: 9 }, (_, index) => index + 1).map((number) => <option key={number} value={`class:${number}`}>{number}반</option>)}
+              {data.availableClubs.map((club) => <option key={club.id} value={`club:${club.id}`}>동아리 · {club.name}</option>)}
             </select>
             {data.rounds.length ? (
-              <select className="select" aria-label="평가 회차" value={selectedRoundId} onChange={(event) => { setSelectedRoundId(event.target.value); void refresh(classNumber, event.target.value); }} disabled={busy}>
+              <select className="select" aria-label="평가 회차" value={selectedRoundId} onChange={(event) => { setSelectedRoundId(event.target.value); void refresh(scopeKey, event.target.value); }} disabled={busy}>
                 {data.rounds.map((round) => <option key={round.id} value={round.id}>{round.title} · {statusLabels[round.status]}</option>)}
               </select>
             ) : null}
@@ -127,13 +241,13 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
           <div><h2 className="section-heading">새 평가 만들기</h2><p className="section-subtitle">핵심 4문항과 자기성찰 2문항이 기본으로 들어갑니다.</p></div>
           <label className="field"><span>평가 제목</span><input className="input" value={title} maxLength={100} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="field"><span>선택 문항 <small>최대 1개</small></span><select className="select" value={optionalItem} onChange={(event) => setOptionalItem(event.target.value as typeof optionalItem)}><option value="none">추가하지 않음</option><option value="safety">안전 수칙과 정직한 기록</option><option value="theory">이론 탐구 기여</option></select></label>
-          <button className="button" disabled={busy} onClick={() => action({ action: "create", classNumber, title, optionalItem }, "평가 초안을 만들었습니다. 문항을 확인한 뒤 학생에게 열어 주세요.")}>평가 초안 만들기</button>
+          <button className="button" disabled={busy} onClick={() => { const [scope, value] = scopeKey.split(":", 2); void action({ action: "create", ...(scope === "club" ? { clubId: value } : { classNumber: Number(value) }), title, optionalItem }, "평가 초안을 만들었습니다. 문항을 확인한 뒤 학생에게 열어 주세요."); }}>평가 초안 만들기</button>
         </section>
       ) : (
         <>
           <section className="card card-body stack">
             <div className="toolbar">
-              <div><span className="eyebrow">{classNumber}반</span><h2 className="section-heading">{selected.title}</h2><p className="section-subtitle">상태: {statusLabels[selected.status]}</p></div>
+              <div><span className="eyebrow">{data.scopeLabel}</span><h2 className="section-heading">{selected.title}</h2><p className="section-subtitle">상태: {statusLabels[selected.status]}</p></div>
               <div className="toolbar-group">
                 {selected.status === "draft" ? <button className="button" disabled={busy} onClick={() => action({ action: "open", roundId: selected.id }, "학생 평가를 열었습니다.")}>학생 평가 열기</button> : null}
                 {selected.status === "open" ? <button className="button danger" disabled={busy} onClick={() => window.confirm("학생 입력을 마감하고 교사 검토로 전환할까요?") && action({ action: "close", roundId: selected.id }, "학생 입력을 마감했습니다. 익명 의견을 검토해 주세요.")}>입력 마감</button> : null}
@@ -150,7 +264,7 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
             {selected.status === "reviewing" && pendingComments > 0 ? <div className="warning-box">검토하지 않은 익명 의견 {pendingComments}건을 모두 승인하거나 숨겨야 결과를 공개할 수 있습니다.</div> : null}
           </section>
 
-          {selected.status === "draft" ? (
+          {selected.status === "draft" && !data.clubId ? (
             <section className="card card-body stack">
               <div><h2 className="section-heading">문항과 행동 기준 확인</h2><p className="section-subtitle">평가를 연 뒤에는 현재 회차의 문항을 바꿀 수 없습니다.</p></div>
               <label className="field"><span>평가 제목</span><input className="input" maxLength={100} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
@@ -169,7 +283,7 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
           <section className="card">
             <div className="card-body"><h2 className="section-heading">학생별 제출·공개 조건</h2><p className="section-subtitle">유효 평가가 문항마다 3건 이상이어야 숫자 평균과 개별 익명 의견을 공개할 수 있습니다.</p></div>
             <div className="table-wrap"><table className="data-table evaluation-progress-table"><thead><tr><th>팀·학생</th><th>자기평가</th><th>동료평가 제출</th><th>받은 평가</th><th>문항별 유효 수</th><th>공개 방식</th></tr></thead><tbody>
-              {selected.progress.map((student) => <tr key={student.studentId} className={!student.disclosureEligible ? "needs-teacher" : ""}><td><b>{student.teamName} · {student.name}</b><br /><small>{student.loginId}</small></td><td>{student.selfSubmitted ? <span className="badge approved">제출</span> : <span className="badge pending">미제출</span>}</td><td>{student.peerSubmitted}/{student.peerExpected}</td><td>{student.peerReceived}</td><td>{selected.template.items.map((item) => <span className={`badge ${student.validCounts[item.id] >= 3 ? "approved" : "pending"}`} key={item.id}>{student.validCounts[item.id] ?? 0}</span>)}</td><td>{student.disclosureEligible ? "평균·승인 의견" : "교사 종합 피드백"}</td></tr>)}
+              {selected.progress.map((student) => <tr key={student.studentId} className={!student.disclosureEligible ? "needs-teacher" : ""}><td><b>{student.teamName} · {student.name}</b><br /><small>{student.loginId}</small></td><td>{student.selfSubmitted ? <span className="badge approved">제출</span> : <span className="badge pending">미제출</span>}</td><td>{student.peerSubmitted}/{student.peerExpected}</td><td>{student.peerReceived}</td><td>{selected.peerTemplate.items.map((item) => <span className={`badge ${student.validCounts[item.id] >= 3 ? "approved" : "pending"}`} key={item.id}>{student.validCounts[item.id] ?? 0}</span>)}</td><td>{student.disclosureEligible ? "평균·승인 의견" : "교사 종합 피드백"}</td></tr>)}
             </tbody></table></div>
           </section>
 
@@ -180,11 +294,10 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
               {selected.peerEvaluations.filter((evaluation) => evaluation.publicComment).map((evaluation) => (
                 <article className={`peer-review-card ${evaluation.commentReviewStatus === "pending" ? "needs-review" : ""}`} key={evaluation.id}>
                   <div className="toolbar"><div><b>{evaluation.teamName} · {evaluation.evaluatorName} → {evaluation.evaluateeName}</b><p className="section-subtitle">교사에게는 평가자가 표시되며 학생에게는 공개되지 않습니다.</p></div><span className={`badge ${evaluation.commentReviewStatus === "pending" ? "pending" : evaluation.commentReviewStatus === "approved" ? "approved" : ""}`}>{evaluation.commentReviewStatus === "pending" ? "검토 필요" : evaluation.commentReviewStatus === "approved" ? "공개 승인" : "숨김"}</span></div>
-                  <div className="peer-response-summary">{evaluation.responses.map((response) => <span key={response.itemId}><b>{selected.template.items.find((item) => item.id === response.itemId)?.prompt}</b> {typeof response.value === "number" ? `${response.value}단계` : "판단하기 어려움"}{response.reason ? ` · ${response.reason}` : ""}</span>)}</div>
+                  <div className="peer-response-summary">{evaluation.responses.map((response) => <span key={response.itemId}><b>{selected.peerTemplate.items.find((item) => item.id === response.itemId)?.prompt}</b> {typeof response.value === "number" ? `${response.value}단계` : "판단하기 어려움"}{response.reason ? ` · ${response.reason}` : ""}</span>)}</div>
                   {evaluation.privateEvidence ? <div className="private-review-note"><b>교사 확인용 근거</b><p>{evaluation.privateEvidence}</p></div> : null}
                   {evaluation.flags.length ? <div className="toolbar-group">{evaluation.flags.map((flag) => <span className="badge pending" key={flag}>{flagLabels[flag] ?? flag}</span>)}</div> : null}
-                  <label className="field"><span>학생에게 공개할 문장</span><textarea className="textarea compact" maxLength={200} disabled={selected.status === "published"} value={redactions[evaluation.id] ?? evaluation.publicComment} onChange={(event) => setRedactions((current) => ({ ...current, [evaluation.id]: event.target.value }))} /></label>
-                  {selected.status !== "published" ? <div className="toolbar-group"><button className="button" disabled={busy} onClick={() => action({ action: "reviewComment", evaluationId: evaluation.id, status: "approved", redactedPublicComment: redactions[evaluation.id] ?? evaluation.publicComment }, "익명 의견을 공개 승인했습니다.")}>원문/최소 가림 승인</button><button className="button danger" disabled={busy} onClick={() => action({ action: "reviewComment", evaluationId: evaluation.id, status: "hidden", redactedPublicComment: "" }, "익명 의견을 숨겼습니다.")}>숨김</button></div> : null}
+                  <CommentDecisionEditor key={`${selected.id}:${evaluation.id}`} currentUserId={currentUserId} roundId={selected.id} roundStatus={selected.status} evaluation={evaluation} onSaved={() => refresh(scopeKey, selected.id)} />
                 </article>
               ))}
             </section>
@@ -193,12 +306,7 @@ export function TeacherEvaluationManager({ initialData }: { initialData: Evaluat
           {selected.status === "reviewing" || selected.status === "closed" || selected.status === "published" ? (
             <section className="card card-body stack">
               <div><h2 className="section-heading">학생별 교사 종합 피드백</h2><p className="section-subtitle">유효 평가가 3건 미만인 학생은 결과 공개 전에 반드시 작성해야 합니다.</p></div>
-              {selected.progress.map((student) => (
-                <article className={`summary-editor ${!student.disclosureEligible ? "required-summary" : ""}`} key={student.studentId}>
-                  <label className="field"><span>{student.teamName} · {student.name} {!student.disclosureEligible ? <b>필수</b> : <small>선택</small>}</span><textarea className="textarea compact" maxLength={2_000} disabled={selected.status === "published"} value={summaries[student.studentId] ?? ""} onChange={(event) => setSummaries((current) => ({ ...current, [student.studentId]: event.target.value }))} /></label>
-                  {selected.status !== "published" ? <button className="button secondary" disabled={busy} onClick={() => action({ action: "saveSummary", roundId: selected.id, studentId: student.studentId, teacherSummary: summaries[student.studentId] ?? "" }, `${student.name} 학생의 종합 피드백을 저장했습니다.`)}>피드백 저장</button> : null}
-                </article>
-              ))}
+              {selected.progress.map((student) => <TeacherSummaryEditor key={`${selected.id}:${student.studentId}`} currentUserId={currentUserId} roundId={selected.id} roundStatus={selected.status} student={student} onSaved={() => refresh(scopeKey, selected.id)} />)}
             </section>
           ) : null}
         </>

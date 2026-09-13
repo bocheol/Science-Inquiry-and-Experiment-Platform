@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import {
   createAnnouncement,
@@ -9,6 +10,7 @@ import {
   updateAnnouncement,
 } from "@/lib/notices";
 import { sendPushForNotice } from "@/lib/push-notifications";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 const announcementFields = {
   title: z.string().trim().min(2).max(120),
@@ -42,7 +44,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await requireTeacher();
   if (!user) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  const parsed = createSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "공지 대상·제목·내용·일정을 확인해 주세요." }, { status: 400 });
   try {
     const { sendPush, ...input } = parsed.data;
@@ -50,14 +52,14 @@ export async function POST(request: Request) {
     const push = sendPush ? await sendPushForNotice(id) : null;
     return NextResponse.json({ ok: true, id, push });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "공지를 등록하지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "공지를 등록하지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }
 
 export async function PATCH(request: Request) {
   const user = await requireTeacher();
   if (!user) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = updateSchema.safeParse(await request.json().catch(() => null));
+  const parsed = updateSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "공지 변경 요청을 확인해 주세요." }, { status: 400 });
   try {
     if (parsed.data.action === "update") {
@@ -70,6 +72,6 @@ export async function PATCH(request: Request) {
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "공지를 변경하지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "공지를 변경하지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }

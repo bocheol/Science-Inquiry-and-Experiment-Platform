@@ -1,5 +1,6 @@
 import { OAuth2Client } from 'google-auth-library';
 import { runDailySummaries } from '@/lib/discussion-summary';
+import { deliverDiscussionPush } from '@/lib/discussion-push';
 
 const verifier = new OAuth2Client();
 export async function POST(request: Request) {
@@ -13,6 +14,7 @@ export async function POST(request: Request) {
     if (payload?.email !== email || payload.email_verified !== true) return Response.json({ message: '권한이 없습니다.' }, { status: 403 });
   } catch { return Response.json({ message: '권한이 없습니다.' }, { status: 403 }); }
   try {
+    await deliverDiscussionPush();
     const result = await runDailySummaries();
     console.info(JSON.stringify({ event: 'daily_summary_batch', ...result }));
     return Response.json(result);

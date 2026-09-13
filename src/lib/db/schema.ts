@@ -19,10 +19,16 @@ CREATE TABLE IF NOT EXISTS users (
   class_id TEXT REFERENCES classes(id),
   password_hash TEXT NOT NULL,
   must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
+  account_type TEXT NOT NULL DEFAULT 'standard' CHECK (account_type IN ('standard', 'demo')),
+  is_master BOOLEAN NOT NULL DEFAULT FALSE,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (academic_year, login_id)
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_master BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE users SET is_master = TRUE WHERE login_id = 'teacher2' AND role = 'teacher';
 
 CREATE TABLE IF NOT EXISTS clubs (
   id TEXT PRIMARY KEY,
@@ -31,6 +37,39 @@ CREATE TABLE IF NOT EXISTS clubs (
   created_by TEXT NOT NULL REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS club_teacher_assignments (
+  club_id TEXT NOT NULL REFERENCES clubs(id),
+  teacher_id TEXT NOT NULL REFERENCES users(id),
+  assigned_by TEXT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (club_id, teacher_id)
+);
+
+CREATE TABLE IF NOT EXISTS club_config_versions (
+  id TEXT PRIMARY KEY,
+  club_id TEXT NOT NULL REFERENCES clubs(id),
+  config_type TEXT NOT NULL CHECK (config_type IN ('plan', 'report', 'materials', 'self_evaluation', 'peer_evaluation', 'exam', 'custom_tab')),
+  config_key TEXT NOT NULL DEFAULT 'default',
+  version_number INTEGER NOT NULL CHECK (version_number > 0),
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
+  definition JSONB NOT NULL DEFAULT '{}',
+  based_on_id TEXT REFERENCES club_config_versions(id),
+  created_by TEXT NOT NULL REFERENCES users(id),
+  published_by TEXT REFERENCES users(id),
+  published_at TIMESTAMPTZ,
+  archived_at TIMESTAMPTZ,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (club_id, config_type, config_key, version_number)
+);
+
+INSERT INTO club_teacher_assignments (club_id, teacher_id, assigned_by)
+SELECT c.id, c.created_by, c.created_by FROM clubs c
+JOIN users u ON u.id = c.created_by AND u.role = 'teacher'
+ON CONFLICT (club_id, teacher_id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS club_members (
   club_id TEXT NOT NULL REFERENCES clubs(id),
@@ -107,6 +146,8 @@ CREATE TABLE IF NOT EXISTS investigation_plans (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE investigation_plans ADD COLUMN IF NOT EXISTS config_version_id TEXT REFERENCES club_config_versions(id);
+
 CREATE TABLE IF NOT EXISTS field_locks (
   plan_id TEXT NOT NULL REFERENCES investigation_plans(id),
   field_key TEXT NOT NULL,
@@ -131,6 +172,19 @@ CREATE TABLE IF NOT EXISTS material_requests (
   synced_at TIMESTAMPTZ
 );
 
+ALTER TABLE material_requests ADD COLUMN IF NOT EXISTS config_version_id TEXT REFERENCES club_config_versions(id);
+ALTER TABLE material_requests ADD COLUMN IF NOT EXISTS sync_snapshot JSONB;
+ALTER TABLE material_requests ADD COLUMN IF NOT EXISTS sync_operation_id TEXT;
+ALTER TABLE material_requests ADD COLUMN IF NOT EXISTS sync_batch JSONB;
+
+-- A reservation has no timeout: an uncertain remote write must be reconciled
+-- with the same immutable batch before another write can change row positions.
+CREATE TABLE IF NOT EXISTS material_sheet_dispatch (
+  spreadsheet_id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL,
+  request_id TEXT NOT NULL REFERENCES material_requests(id)
+);
+
 CREATE TABLE IF NOT EXISTS experiment_journals (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES inquiry_sessions(id),
@@ -141,9 +195,10 @@ CREATE TABLE IF NOT EXISTS experiment_journals (
   observations TEXT NOT NULL DEFAULT '',
   reflections TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (session_id, student_id, session_number)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE experiment_journals ADD COLUMN IF NOT EXISTS write_version INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS experiment_journal_images (
   id TEXT PRIMARY KEY,
@@ -168,6 +223,8 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS config_version_id TEXT REFERENCES club_config_versions(id);
 
 CREATE TABLE IF NOT EXISTS report_member_roles (
   report_id TEXT NOT NULL REFERENCES reports(id),
@@ -220,6 +277,13 @@ CREATE TABLE IF NOT EXISTS exam_sets (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE exam_sets ALTER COLUMN class_id DROP NOT NULL;
+ALTER TABLE exam_sets ADD COLUMN IF NOT EXISTS club_id TEXT REFERENCES clubs(id);
+ALTER TABLE exam_sets ADD COLUMN IF NOT EXISTS config_version_id TEXT REFERENCES club_config_versions(id);
+ALTER TABLE exam_sets ADD COLUMN IF NOT EXISTS parent_exam_set_id TEXT REFERENCES exam_sets(id);
+ALTER TABLE exam_sets ADD COLUMN IF NOT EXISTS revision_number INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE exam_sets ADD COLUMN IF NOT EXISTS correction_reason TEXT;
 
 CREATE TABLE IF NOT EXISTS exam_questions (
   id TEXT PRIMARY KEY,
@@ -289,6 +353,28 @@ CREATE TABLE IF NOT EXISTS evaluation_rounds (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE evaluation_rounds ALTER COLUMN class_id DROP NOT NULL;
+ALTER TABLE evaluation_rounds ADD COLUMN IF NOT EXISTS club_id TEXT REFERENCES clubs(id);
+ALTER TABLE evaluation_rounds ADD COLUMN IF NOT EXISTS config_version_id TEXT REFERENCES club_config_versions(id);
+ALTER TABLE evaluation_rounds ADD COLUMN IF NOT EXISTS peer_config_version_id TEXT REFERENCES club_config_versions(id);
+ALTER TABLE evaluation_rounds ADD COLUMN IF NOT EXISTS peer_template_snapshot JSONB;
+
+CREATE TABLE IF NOT EXISTS club_custom_responses (
+  id TEXT PRIMARY KEY,
+  config_version_id TEXT NOT NULL REFERENCES club_config_versions(id),
+  session_id TEXT NOT NULL REFERENCES inquiry_sessions(id),
+  student_id TEXT REFERENCES users(id),
+  response_data JSONB NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'feedback', 'reviewed')),
+  teacher_feedback TEXT,
+  submitted_by TEXT REFERENCES users(id),
+  reviewed_by TEXT REFERENCES users(id),
+  submitted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (config_version_id, session_id, student_id)
+);
+
 CREATE TABLE IF NOT EXISTS self_evaluations (
   id TEXT PRIMARY KEY,
   round_id TEXT NOT NULL REFERENCES evaluation_rounds(id) ON DELETE CASCADE,
@@ -321,6 +407,10 @@ CREATE TABLE IF NOT EXISTS peer_evaluations (
   UNIQUE (round_id, evaluator_id, evaluatee_id)
 );
 
+ALTER TABLE club_custom_responses ADD COLUMN IF NOT EXISTS write_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE self_evaluations ADD COLUMN IF NOT EXISTS write_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE peer_evaluations ADD COLUMN IF NOT EXISTS write_version INTEGER NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS evaluation_publications (
   id TEXT PRIMARY KEY,
   round_id TEXT NOT NULL REFERENCES evaluation_rounds(id) ON DELETE CASCADE,
@@ -335,6 +425,8 @@ CREATE TABLE IF NOT EXISTS evaluation_publications (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (round_id, student_id)
 );
+
+ALTER TABLE evaluation_publications ADD COLUMN IF NOT EXISTS write_version INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
@@ -399,6 +491,10 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_class ON users(class_id);
+CREATE INDEX IF NOT EXISTS idx_users_account_type ON users(account_type, status);
+CREATE INDEX IF NOT EXISTS idx_club_teacher_teacher ON club_teacher_assignments(teacher_id, club_id);
+CREATE INDEX IF NOT EXISTS idx_club_config_versions ON club_config_versions(club_id, config_type, status, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_custom_responses_session ON club_custom_responses(session_id, config_version_id, student_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_material_team ON material_requests(team_id, submitted_at);

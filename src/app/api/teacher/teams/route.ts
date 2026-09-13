@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import { archiveTeam, assignStudent, createTeam, removeStudent, restoreTeam, setTeamLeader } from "@/lib/teams";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("create"), classNumber: z.number().int().min(1).max(9), teamNumber: z.number().int().min(1).max(20) }),
@@ -15,7 +17,7 @@ const schema = z.discriminatedUnion("action", [
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user || user.role !== "teacher" || user.mustChangePassword) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const parsed = schema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "요청 내용을 확인해 주세요." }, { status: 400 });
   try {
     const input = parsed.data;
@@ -27,6 +29,6 @@ export async function POST(request: Request) {
     if (input.action === "restore") await restoreTeam(user.id, input.teamId);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "팀을 변경하지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "팀을 변경하지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }

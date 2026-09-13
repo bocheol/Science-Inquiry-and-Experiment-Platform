@@ -21,6 +21,8 @@ export type StoredJournalDraft = {
   activities: string;
   observations: string;
   reflections: string;
+  /** undefined means a legacy device draft whose server base was never recorded. */
+  baseVersion?: number | null;
   existingImages: JournalImage[];
   newPhotos: StoredJournalPhoto[];
   pendingSync: boolean;
@@ -44,7 +46,10 @@ async function runStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectSt
     return await new Promise<T>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, mode);
       const request = action(transaction.objectStore(STORE_NAME));
-      request.onsuccess = () => resolve(request.result);
+      // A request can succeed before its transaction fails (for example, quota).
+      transaction.oncomplete = () => resolve(request.result);
+      transaction.onabort = () => reject(transaction.error ?? new Error("임시 저장소 작업이 취소되었습니다."));
+      transaction.onerror = () => reject(transaction.error ?? new Error("임시 저장소 작업에 실패했습니다."));
       request.onerror = () => reject(request.error ?? new Error("임시 저장소 작업에 실패했습니다."));
     });
   } finally {

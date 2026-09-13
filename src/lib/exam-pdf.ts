@@ -99,7 +99,7 @@ export async function buildExamPdf(data: ExamSetData, includeAnswers = false) {
     useKoreanFont(doc, fontPath);
     doc.fillColor("#1f6a50").fontSize(10).text("과탐실 AI 탐구 플랫폼", { align: "center" });
     doc.moveDown(0.35).fillColor("#15231e").fontSize(19).text(includeAnswers ? `${data.title} - 교사용 답안` : data.title, { align: "center" });
-    doc.moveDown(0.6).fontSize(10.5).text(`${paper.classNumber}반  |  ${paper.teamName}  |  학번 ${paper.loginId}  |  이름 ${paper.studentName}`, { align: "center" });
+    doc.moveDown(0.6).fontSize(10.5).text(`${data.activityLabel}  |  ${paper.teamName}  |  학번 ${paper.loginId}  |  이름 ${paper.studentName}`, { align: "center" });
     doc.moveDown(0.8).strokeColor("#7fa595").lineWidth(1).moveTo(MARGIN, doc.y).lineTo(A4_WIDTH - MARGIN, doc.y).stroke();
     doc.moveDown(0.7);
     const questions = questionsForPaper(data, paper);

@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MATERIAL_BUDGET_WON } from "@/lib/constants";
+import { PRACTICE_MATERIAL_LABEL } from "@/lib/material-practice";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { normalizeMaterialLink } from "@/lib/material-links";
 import type { MaterialItem } from "@/lib/types";
@@ -9,15 +10,39 @@ import { useToast } from "@/components/toast-provider";
 
 const blankItem = (): MaterialItem => ({ name: "", specification: "", unitPrice: 0, quantity: 1, shipping: 0, link: "" });
 
-export function MaterialForm({ data, onRefresh }: { data: InquiryData; onRefresh: () => Promise<void> }) {
+export function MaterialForm({ data, currentUserId, onRefresh }: { data: InquiryData; currentUserId: string; onRefresh: () => Promise<void> }) {
   const { showToast } = useToast();
   const [items, setItems] = useState<MaterialItem[]>(data.materials?.items.length ? data.materials.items : [blankItem()]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [ready, setReady] = useState(false);
+  const sending = useRef(false);
   const submissionId = useRef(typeof crypto !== "undefined" ? crypto.randomUUID() : `${Date.now()}-material`);
+  const storageKey = `science-material-draft:${currentUserId}:${data.session.id}:${data.session.cycle?.id ?? "uncategorized"}`;
   const total = useMemo(() => items.reduce((sum, item) => sum + item.unitPrice * item.quantity + item.shipping, 0), [items]);
   const leader = data.members.find((member) => member.isLeader);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      const draft = raw ? JSON.parse(raw) : null;
+      if (draft && typeof draft.submissionId === "string" && Array.isArray(draft.items) && draft.items.length <= 20
+        && draft.items.every((item: MaterialItem) => item && [item.name, item.specification, item.link].every(value => typeof value === "string")
+          && [item.unitPrice, item.quantity, item.shipping].every(value => typeof value === "number" && Number.isFinite(value)))) {
+        submissionId.current = draft.submissionId;
+        setItems(draft.items);
+        setNotice("이 탭에서 작성하던 준비물 내용을 복구했습니다. 제출 전 내용을 확인해 주세요.");
+      }
+    } catch { setError("기기에 보관한 준비물 초안을 읽지 못했습니다."); }
+    setReady(true);
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!ready) return;
+    try { sessionStorage.setItem(storageKey, JSON.stringify({ submissionId: submissionId.current, items })); }
+    catch { setError("기기 초안을 보관하지 못했습니다. 화면을 떠나기 전에 작성 내용을 복사해 주세요."); }
+  }, [items, ready, storageKey]);
 
   function update(index: number, key: keyof MaterialItem, value: string) {
     setItems((current) => current.map((item, itemIndex) => itemIndex === index ? {
@@ -40,6 +65,7 @@ export function MaterialForm({ data, onRefresh }: { data: InquiryData; onRefresh
   }
 
   async function submit() {
+    if (!ready || sending.current) return;
     setError(""); setNotice("");
     const normalizedItems: MaterialItem[] = [];
     for (const [index, item] of items.entries()) {
@@ -51,28 +77,37 @@ export function MaterialForm({ data, onRefresh }: { data: InquiryData; onRefresh
       normalizedItems.push({ ...item, link: result.link });
     }
     setItems(normalizedItems);
+    sending.current = true;
     setBusy(true);
-    const response = await fetch("/api/inquiry/materials", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ submissionId: submissionId.current, sessionId: data.session.id, items: normalizedItems }),
-    });
-    const result = (await response.json()) as { message?: string; syncStatus?: string; syncError?: string };
-    setBusy(false);
-    if (!response.ok) {
-      const message = result.message ?? "준비물을 저장하지 못했습니다.";
+    try {
+      const response = await fetch("/api/inquiry/materials", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ submissionId: submissionId.current, sessionId: data.session.id, cycleId: data.session.cycle?.id, items: normalizedItems }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const result = (await response.json()) as { message?: string; syncStatus?: string; syncError?: string };
+      if (!response.ok) throw new Error(result.message ?? "준비물을 저장하지 못했습니다.");
+      setNotice(result.syncStatus === "synced" ? "Google Sheet에 반영했습니다." : result.syncError ?? "플랫폼에 저장했습니다. Google Sheet 반영은 교사 재전송이 필요합니다.");
+      showToast("준비물이 신청되었습니다.");
+      await onRefresh().catch(() => setError("신청은 저장했지만 화면을 갱신하지 못했습니다. 작성 내용은 유지됩니다."));
+    } catch (cause) {
+      const message = cause instanceof TypeError || (cause instanceof Error && cause.name === "TimeoutError")
+        ? "연결이 끊겼거나 응답이 늦습니다. 작성 내용은 유지되며 준비물 제출을 다시 시도할 수 있습니다."
+        : cause instanceof Error ? cause.message : "준비물을 저장하지 못했습니다.";
       setError(message);
       showToast(message, "error");
-      return;
+    } finally {
+      sending.current = false;
+      setBusy(false);
     }
-    setNotice(result.syncStatus === "synced" ? "Google Sheet에 반영했습니다." : "플랫폼에 저장했습니다. Google Sheet 연결 후 자동 또는 교사 재전송이 필요합니다.");
-    showToast("준비물이 신청되었습니다.");
-    await onRefresh();
   }
+
+  if (!ready) return <div className="empty-state">준비물 초안을 불러오는 중…</div>;
 
   return (
     <section className="card">
       <div className="card-body">
-        <div className="page-title" style={{ marginBottom: 12 }}><div><h1 style={{ fontSize: 26 }}>준비물 신청</h1><p>Google Sheet와 같은 열 순서로 입력합니다. 같은 품목도 다른 팀과 합치지 않습니다.</p></div>{data.materials ? <span className={`badge ${data.materials.syncStatus === "failed" ? "feedback" : ""}`}>{data.materials.syncStatus === "synced" ? "시트 반영됨" : data.materials.syncStatus === "failed" ? "전송 실패" : "전송 대기"}</span> : null}</div>
+        <div className="page-title" style={{ marginBottom: 12 }}><div><h1 style={{ fontSize: 26 }}>준비물 신청</h1><p>Google Sheet와 같은 열 순서로 입력합니다. 같은 품목도 다른 팀과 합치지 않습니다.</p></div>{data.materials ? <span className={`badge ${data.materials.syncStatus === "failed" ? "feedback" : ""}`}>{data.materials.isPractice ? PRACTICE_MATERIAL_LABEL : data.materials.syncStatus === "synced" ? "시트 반영됨" : data.materials.syncStatus === "failed" ? "전송 실패" : "전송 대기"}</span> : null}</div>
         <div className="notice-box"><b>자동 입력:</b> {data.team.teamNumber}조 · 팀장 학번/이름 {leader ? `${leader.loginId} ${leader.name}` : "(선생님 지정 필요)"}</div>
         <div className="notice-box"><b>상품 링크:</b> 모바일 쇼핑 앱의 공유 문구 전체를 붙여넣어도 됩니다. 지원 쇼핑몰의 모바일 주소는 PC용 주소로 자동 변환하며, 변환할 수 없는 모바일 전용 주소는 제출 전에 알려드립니다.</div>
         {total > MATERIAL_BUDGET_WON ? <div className="warning-box"><b>예산 초과</b> — 5만원을 넘었지만 제출할 수 있습니다. 선생님 승인이 필요합니다.</div> : null}

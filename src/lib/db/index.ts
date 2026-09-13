@@ -1,9 +1,12 @@
 import { hash } from "bcryptjs";
 import { newDb } from "pg-mem";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { ACADEMIC_YEAR } from "@/lib/constants";
 import { createId } from "@/lib/id";
 import { SCHEMA_SQL } from "@/lib/db/schema";
+import { assertDatabaseCompatibility, runDatabaseMigrations } from "@/lib/db/migrations";
+import { ensureInitialCycle } from "@/lib/inquiry-cycles";
+import { withDatabaseBootstrapLock } from "@/lib/db/bootstrap-lock";
 
 type GlobalDb = typeof globalThis & {
   __sciencePool?: Pool;
@@ -54,6 +57,22 @@ function makePool() {
 }
 
 async function seed(pool: Pool) {
+  const client = await pool.connect();
+  let discard = false;
+  try {
+    await client.query("BEGIN");
+    await seedInitialRows(client);
+    await client.query("COMMIT");
+  } catch (error) {
+    try { await client.query("ROLLBACK"); }
+    catch { discard = true; }
+    throw error;
+  } finally {
+    client.release(discard);
+  }
+}
+
+async function seedInitialRows(pool: Pick<PoolClient, "query">) {
   const { rows } = await pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM users");
   if (Number(rows[0]?.count ?? 0) > 0) return;
 
@@ -115,26 +134,40 @@ async function seed(pool: Pool) {
       `INSERT INTO inquiry_sessions (id, team_id, interest_input, stage)
        VALUES ('demo_session_1', 'demo_team_1', '생활 속 산과 염기의 변화를 측정해 보고 싶어요', 'EXPERIMENTING')`,
     );
+    const demoCycleId = await ensureInitialCycle(pool, "demo_session_1");
     await pool.query(
-      `INSERT INTO investigation_plans (id, session_id, form_data, review_status)
-       VALUES ('demo_plan_1', 'demo_session_1', $1, 'approved')`,
-      [JSON.stringify({ field: "화학", topic: "" })],
+      `INSERT INTO investigation_plans (id, session_id, cycle_id, form_data, review_status)
+       VALUES ('demo_plan_1', 'demo_session_1', $1, $2, 'approved')`,
+      [demoCycleId, JSON.stringify({ field: "화학", topic: "" })],
     );
-    await pool.query("INSERT INTO reports (id, session_id) VALUES ('report_demo_session_1', 'demo_session_1')");
+    await pool.query("INSERT INTO reports (id, session_id, cycle_id) VALUES ('report_demo_session_1', 'demo_session_1', $1)", [demoCycleId]);
   }
 }
 
 async function initialize() {
   const pool = makePool();
-  await pool.query(SCHEMA_SQL);
-  await seed(pool);
-  globalDb.__sciencePool = pool;
-  return pool;
+  try {
+    await withDatabaseBootstrapLock(pool, async () => {
+      await assertDatabaseCompatibility(pool);
+      await pool.query(SCHEMA_SQL);
+      await runDatabaseMigrations(pool);
+      await seed(pool);
+    });
+    globalDb.__sciencePool = pool;
+    return pool;
+  } catch (error) {
+    await pool.end().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function getDb() {
   if (globalDb.__sciencePool) return globalDb.__sciencePool;
-  globalDb.__scienceDbReady ??= initialize();
+  globalDb.__scienceDbReady ??= initialize().catch((error) => {
+    // A transient connection failure must not poison every later request.
+    globalDb.__scienceDbReady = undefined;
+    throw error;
+  });
   return globalDb.__scienceDbReady;
 }
 

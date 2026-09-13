@@ -4,7 +4,7 @@ import { buildTeacherProgressExport } from "@/lib/teacher-export";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
-  if (!user || user.role !== "teacher") return Response.json({ message: "권한이 없습니다." }, { status: 403 });
+  if (!user || user.role !== "teacher" || user.mustChangePassword) return Response.json({ message: "권한이 없습니다." }, { status: 403 });
 
   const params = new URL(request.url).searchParams;
   const format = params.get("format") === "csv" ? "csv" : "xlsx";

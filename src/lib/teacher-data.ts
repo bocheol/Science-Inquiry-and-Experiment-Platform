@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/db";
+import { ACADEMIC_YEAR } from "@/lib/constants";
 
 export type AttentionLevel = "teacher" | "student" | "none";
 
@@ -107,16 +108,20 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
          FROM users u
          JOIN classes c ON c.id = u.class_id
          LEFT JOIN team_members tm ON tm.user_id = u.id AND tm.status = 'active'
-           AND tm.team_id IN (SELECT id FROM teams WHERE club_id IS NULL)
+           AND tm.team_id IN (SELECT t.id FROM teams t JOIN classes tc ON tc.id = t.class_id WHERE t.club_id IS NULL AND tc.academic_year = $1)
          LEFT JOIN teams t ON t.id = tm.team_id AND t.status = 'active'
-        WHERE u.role = 'student' AND u.status = 'active'
+        WHERE u.role = 'student' AND u.status = 'active' AND u.account_type = 'standard'
+          AND u.academic_year = $1 AND c.academic_year = $1
         ORDER BY c.class_number, u.login_id`,
+      [ACADEMIC_YEAR],
     ),
     db.query<{ id: string; name: string; login_id: string; class_number: number }>(
       `SELECT u.id, u.name, u.login_id, c.class_number
          FROM users u JOIN classes c ON c.id = u.class_id
-        WHERE u.role = 'student' AND u.status = 'inactive'
+        WHERE u.role = 'student' AND u.status = 'inactive' AND u.account_type = 'standard'
+          AND u.academic_year = $1 AND c.academic_year = $1
         ORDER BY c.class_number, u.login_id`,
+      [ACADEMIC_YEAR],
     ),
     db.query<{
       id: string; name: string; team_number: number; class_number: number; leader_user_id: string | null;
@@ -133,8 +138,9 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
          LEFT JOIN inquiry_sessions s ON s.team_id = t.id
          LEFT JOIN investigation_plans p ON p.session_id = s.id
          LEFT JOIN reports r ON r.session_id = s.id
-        WHERE t.status = 'active'
+        WHERE t.status = 'active' AND c.academic_year = $1
         ORDER BY c.class_number, t.team_number`,
+      [ACADEMIC_YEAR],
     ),
     db.query<{
       id: string; name: string; team_number: number; class_number: number;
@@ -145,11 +151,13 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
          FROM teams t
          JOIN classes c ON c.id = t.class_id
          LEFT JOIN users archiver ON archiver.id = t.archived_by
-        WHERE t.status = 'archived'
+        WHERE t.status = 'archived' AND c.academic_year = $1
         ORDER BY c.class_number, t.team_number`,
+      [ACADEMIC_YEAR],
     ),
     db.query<{ team_id: string; count: string }>(
-      "SELECT team_id, COUNT(*)::text AS count FROM team_members WHERE status = 'active' GROUP BY team_id",
+      "SELECT tm.team_id, COUNT(*)::text AS count FROM team_members tm JOIN users u ON u.id = tm.user_id WHERE tm.status = 'active' AND u.account_type = 'standard' AND u.academic_year = $1 GROUP BY tm.team_id",
+      [ACADEMIC_YEAR],
     ),
     db.query<{ session_id: string; count: string }>(
       "SELECT session_id, COUNT(*)::text AS count FROM messages WHERE role = 'user' GROUP BY session_id",

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { getJournalImage, JournalAccessError } from "@/lib/journal-service";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 export async function GET(_request: Request, context: { params: Promise<{ imageId: string }> }) {
   const user = await getCurrentUser();
@@ -18,6 +19,6 @@ export async function GET(_request: Request, context: { params: Promise<{ imageI
     });
   } catch (error) {
     const status = error instanceof JournalAccessError ? error.status : 400;
-    return NextResponse.json({ message: error instanceof Error ? error.message : "사진을 불러오지 못했습니다." }, { status });
+    return NextResponse.json({ message: userFacingMessage(error, "사진을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status });
   }
 }

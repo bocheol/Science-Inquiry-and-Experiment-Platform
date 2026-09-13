@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import { addStudent, deactivateStudent, restoreStudent } from "@/lib/student-management";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 const addSchema = z.object({
   loginId: z.string().trim().length(5),
@@ -21,26 +23,26 @@ async function requireTeacher() {
 export async function POST(request: Request) {
   const user = await requireTeacher();
   if (!user) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = addSchema.safeParse(await request.json().catch(() => null));
+  const parsed = addSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "학생의 5자리 학번과 이름을 확인해 주세요." }, { status: 400 });
   try {
     const credential = await addStudent(user.id, parsed.data);
     return NextResponse.json({ ok: true, credential });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "학생을 추가하지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "학생을 추가하지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }
 
 export async function PATCH(request: Request) {
   const user = await requireTeacher();
   if (!user) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = statusSchema.safeParse(await request.json().catch(() => null));
+  const parsed = statusSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "학생 계정 변경 요청을 확인해 주세요." }, { status: 400 });
   try {
     if (parsed.data.action === "deactivate") await deactivateStudent(user.id, parsed.data.studentId);
     else await restoreStudent(user.id, parsed.data.studentId);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "학생 계정을 변경하지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "학생 계정을 변경하지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }

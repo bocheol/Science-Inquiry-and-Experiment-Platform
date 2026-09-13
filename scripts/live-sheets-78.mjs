@@ -1,0 +1,51 @@
+// Separate synthetic workbook only. No production DB or production Sheet calls.
+import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {writeFile} from 'node:fs/promises';
+import {GoogleAuth} from 'google-auth-library';
+const id='1h7OY0b9x329xT_xHfHBp171IdqL6gLVcSDCgb4pwPiQ';
+const account='974188506094-compute@developer.gserviceaccount.com';
+const originalFetch=globalThis.fetch;
+const userToken=execFileSync('C:/Users/user/AppData/Local/Google/Cloud SDK/google-cloud-sdk/platform/bundledpython/python.exe',['C:/Users/user/AppData/Local/Google/Cloud SDK/google-cloud-sdk/lib/gcloud.py','auth','print-access-token','--project=chemistry-tutor-493405'],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']}).trim();
+const authResponse=await originalFetch(`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${account}:generateAccessToken`,{method:'POST',headers:{Authorization:`Bearer ${userToken}`,'content-type':'application/json'},body:JSON.stringify({scope:['https://www.googleapis.com/auth/spreadsheets'],lifetime:'1800s'})});
+if(!authResponse.ok){const error=await authResponse.json();console.log(JSON.stringify({stage:'service-account-token',httpStatus:authResponse.status,status:error.error?.status,reasons:error.error?.details?.map(x=>x.reason).filter(Boolean)}));throw new Error('Service account token unavailable; no permissions changed');}
+const {accessToken}=await authResponse.json();
+GoogleAuth.prototype.getClient=async()=>({getRequestHeaders:async()=>new Headers({Authorization:`Bearer ${accessToken}`})});
+process.env.GOOGLE_CLOUD_PROJECT='chemistry-tutor-493405';
+let loseResponse=false,postCount=0,lostResponses=0;
+globalThis.fetch=async(input,init)=>{
+ const url=new URL(String(input));
+ assert.equal(url.origin,'https://sheets.googleapis.com');
+ assert.ok(url.pathname.startsWith(`/v4/spreadsheets/${id}`));
+ if(init?.method==='POST')postCount++;
+ const response=await originalFetch(input,init);
+ if(loseResponse&&init?.method==='POST'&&response.ok){loseResponse=false;lostResponses++;await response.arrayBuffer();throw new Error('Synthetic response loss after Google committed the batch');}
+ return response;
+};
+const {prepareMaterialSheetTransfer,executeMaterialSheetTransfer}=await import('../src/lib/material-sheet-transfer.ts');
+const {googleRequest}=await import('../src/lib/google-sheets.ts');
+const checks=[];const check=(name,condition)=>{assert.ok(condition,name);checks.push(name);console.log(JSON.stringify({check:name,status:'passed'}));};
+const read=async(tab,range,mode='UNFORMATTED_VALUE')=>(await googleRequest(id,`/values/${encodeURIComponent(`'${tab}'!${range}`)}?valueRenderOption=${mode}`)).values??[];
+const items=Array.from({length:6},(_,i)=>({id:`synthetic-${i}`,name:`합성 준비물 ${i+1}`,specification:'시험 전용',unitPrice:1000+i*100,quantity:2,shipping:300,link:'https://example.com/synthetic'}));
+const base={spreadsheetId:id,sheetName:'조별시험',layout:'team_sections',teamNumber:1,teamName:'합성 시험 팀',leaderLoginId:'SYNTHETIC-78',leaderName:'합성 작성자',targetKey:'synthetic-cycle-78',submittedAt:'2026-09-09T00:00:00Z',items};
+let batch=await prepareMaterialSheetTransfer(base,'sheet-78-sections-1');loseResponse=true;
+await executeMaterialSheetTransfer(id,batch);
+const sectionRows=await read('조별시험','A9:J20');
+check('section expansion and total',sectionRows[6][0]==='1조'&&sectionRows[6][8]===16800);
+check('following team preserved',sectionRows[7][0]===2&&sectionRows[7][3]==='다음 조 보존 표식');
+const priorPosts=postCount;await executeMaterialSheetTransfer(id,batch);
+check('same operation retry avoids duplicate write',postCount===priorPosts&&JSON.stringify(sectionRows)===JSON.stringify(await read('조별시험','A9:J20')));
+check('actual committed response loss recovered',lostResponses===1);
+const header={...base,sheetName:'헤더시험',layout:'header_row',items:items.slice(0,2)};
+batch=await prepareMaterialSheetTransfer(header,'sheet-78-header-1');await executeMaterialSheetTransfer(id,batch);
+let rows=await read('헤더시험','A1:K10');check('header mapping and amount',rows.length===3&&rows[1][4]===items[0].name&&rows[1][9]===2300);
+const updated={...header,items:items.slice(0,4),previousOperationId:'sheet-78-header-1'};
+batch=await prepareMaterialSheetTransfer(updated,'sheet-78-header-2');loseResponse=true;await executeMaterialSheetTransfer(id,batch);await executeMaterialSheetTransfer(id,batch);
+rows=await read('헤더시험','A1:K12');check('resubmission expands original block once',rows.length===5&&rows[4][4]===items[3].name);
+batch=await prepareMaterialSheetTransfer({...header,targetKey:'synthetic-cycle-78-next',items:items.slice(0,1)},'sheet-78-next-cycle');await executeMaterialSheetTransfer(id,batch);
+rows=await read('헤더시험','A1:K12');check('next cycle appends and preserves prior rows',rows.length===6&&rows[4][4]===items[3].name&&rows[5][4]===items[0].name);
+const beforeFailure=JSON.stringify(rows);
+const invalid={...batch,receiptId:'invalid-no-receipt-78',requests:[{updateCells:{start:{sheetId:2147483640,rowIndex:0,columnIndex:0},rows:[{values:[{userEnteredValue:{stringValue:'must-not-appear'}}]}],fields:'userEnteredValue'}}]};
+await assert.rejects(()=>executeMaterialSheetTransfer(id,invalid));
+check('actual permanent provider rejection preserves existing rows',JSON.stringify(await read('헤더시험','A1:K12'))===beforeFailure);
+await writeFile('output/test-infra/live-sheets-78.json',JSON.stringify({syntheticOnly:true,spreadsheetId:id,auth:'IAM short-lived token for existing runtime service account, injected headers in test harness',checks,passed:checks.length,postCount,lostResponses,scope:'Product transfer preparation/execution and real Google API. UI and DB dispatch remain covered by prior local tests.'},null,2));

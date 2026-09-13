@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getDb } from "@/lib/db";
@@ -6,6 +6,7 @@ import { createId } from "@/lib/id";
 import type { ExamGenerator, GeneratedExamQuestion, TeamExamSource } from "@/lib/exam-ai";
 import {
   confirmExamSet,
+  createCorrectionExamSet,
   generateExamSet,
   getExamManagementData,
   getExamSetForPdf,
@@ -43,10 +44,10 @@ const fakeGenerator: ExamGenerator = {
   async generateTeam(input) {
     capturedTeam = input.team;
     return {
-      teamQuestions: Array.from({ length: input.teamCount }, (_, index) => question(`팀 ${index + 1}`, ["plan.method", "report.analysis"])),
+      teamQuestions: Array.from({ length: input.teamCount }, (_, index) => question(`팀 ${index + 1}`, input.team.sources.filter(source => source.key.endsWith(".method") || source.key.endsWith(".analysis")).map(source => source.key))),
       individualQuestions: input.team.students.map((student) => ({
         studentRef: student.studentRef,
-        questions: Array.from({ length: input.individualCount }, (_, index) => question(`${student.studentRef} 개인 ${index + 1}`, ["journal.1.observations"])),
+        questions: Array.from({ length: input.individualCount }, (_, index) => question(`${student.studentRef} 개인 ${index + 1}`, [student.sources.find(source => source.key.endsWith(".observations"))!.key])),
       })),
     };
   },
@@ -84,9 +85,36 @@ beforeAll(async () => {
      VALUES ('exam_inactive_journal', $1, 'exam_test_inactive', 1, '2026-08-20', '퇴실 학생의 비공개 관찰')`,
     [sessionId],
   );
+  await db.query("INSERT INTO report_member_roles (report_id, user_id, role_description) VALUES ($1,'exam_test_inactive','제거 학생의 과거 역할')", [reportId]);
 });
 
 describe("fair, source-grounded exam workflow", () => {
+  it("reuses completed AI steps and the final exam when the same generation request is retried", async () => {
+    const common = vi.fn(async (input: Parameters<ExamGenerator["generateCommon"]>[0]) =>
+      Array.from({ length: input.count }, (_, index) => question(`복구 공통 ${index + 1}`)));
+    const team = vi.fn()
+      .mockRejectedValueOnce(new Error("synthetic team interruption"))
+      .mockImplementation(async (input: Parameters<ExamGenerator["generateTeam"]>[0]) => ({
+        teamQuestions: Array.from({ length: input.teamCount }, (_, index) => question(`복구 팀 ${index + 1}`, [input.team.sources.find(source => source.key.endsWith(".method"))!.key])),
+        individualQuestions: input.team.students.map((student) => ({
+          studentRef: student.studentRef,
+          questions: Array.from({ length: input.individualCount }, (_, index) => question(`복구 개인 ${index + 1}`, [student.sources.find(source => source.key.endsWith(".observations"))!.key])),
+        })),
+      }));
+    const recoveringGenerator: ExamGenerator = { generateCommon: common, generateTeam: team };
+    const input = {
+      classNumber, title: "복구 검증 수행평가", commonCount: 1, teamCount: 1, individualCount: 1,
+      totalScore: 30, commonScope: "AI 작업 복구 검증",
+    };
+    const requestId = "a8e79089-7930-486b-a02c-4bdcb62c9f16";
+    await expect(generateExamSet("teacher_bootstrap", input, recoveringGenerator, requestId)).rejects.toThrow("interruption");
+    const recoveredId = await generateExamSet("teacher_bootstrap", input, recoveringGenerator, requestId);
+    expect(await generateExamSet("teacher_bootstrap", input, recoveringGenerator, requestId)).toBe(recoveredId);
+    expect(common).toHaveBeenCalledTimes(1);
+    expect(team).toHaveBeenCalledTimes(2);
+    expect((await getExamManagementData(classNumber, recoveredId)).selected?.questions).toHaveLength(4);
+  });
+
   it("generates equal-scope papers without sending student identities or cross-student journals", async () => {
     examSetId = await generateExamSet("teacher_bootstrap", {
       classNumber, title: "탐구 수행평가", commonCount: 2, teamCount: 1, individualCount: 1,
@@ -96,6 +124,9 @@ describe("fair, source-grounded exam workflow", () => {
     const sent = `${capturedCommon}${JSON.stringify(capturedTeam)}`;
     for (const value of privateValues) expect(sent).not.toContain(value);
     expect(sent).not.toContain("퇴실 학생의 비공개 관찰");
+    expect(sent).not.toContain("제거 학생의 과거 역할");
+    const preservedRole = await (await getDb()).query("SELECT role_description FROM report_member_roles WHERE report_id = $1 AND user_id = 'exam_test_inactive'", [reportId]);
+    expect(preservedRole.rows[0].role_description).toBe("제거 학생의 과거 역할");
     expect(capturedTeam!.sources.every((source) => !source.key.startsWith("journal."))).toBe(true);
     expect(capturedTeam!.students).toHaveLength(2);
     expect(capturedTeam!.students[0]!.sources.map((source) => source.text).join(" ")).toContain("1번 학생만의 관찰");
@@ -109,6 +140,72 @@ describe("fair, source-grounded exam workflow", () => {
       expect(questions.map((item) => item.scope)).toEqual(["common", "common", "team", "individual"]);
       expect(questions.reduce((sum, item) => sum + item.maxScore, 0)).toBe(40);
     }
+  });
+
+  it("sends only approved/reviewed fixed documents after current drafts change and pins their exact source", async () => {
+    const db = await getDb();
+    await db.query("UPDATE investigation_plans SET form_data = $1, review_status = 'draft' WHERE id = 'exam_test_plan'", [JSON.stringify({ method: "절대 출제하지 않을 계획 초안" })]);
+    await db.query("UPDATE reports SET form_data = $1, status = 'draft' WHERE id = $2", [JSON.stringify({ analysis: "절대 출제하지 않을 보고서 초안" }), reportId]);
+    await db.query("UPDATE inquiry_sessions SET selected_topic = '절대 출제하지 않을 새 주제' WHERE id = $1", [sessionId]);
+    let selectedSource: { key: string; label: string; text: string } | undefined;
+    const generator: ExamGenerator = {
+      async generateCommon() { return []; },
+      async generateTeam({ team }) {
+        expect(JSON.stringify(team)).not.toContain("절대 출제하지 않을");
+        selectedSource = team.sources.find(source => source.key.startsWith("report.") && source.key.endsWith(".analysis"));
+        expect(selectedSource?.text).toBe("온도가 높을수록 용질이 더 많이 녹았다.");
+        expect(team.sources.some(source => source.key.startsWith("plan.") && source.text.includes("물의 온도"))).toBe(true);
+        return { teamQuestions: [question("고정 근거", [selectedSource!.key])], individualQuestions: [] };
+      },
+    };
+    const fixedId = await generateExamSet("teacher_bootstrap", { classNumber, title: "고정본 출제", commonCount: 0, teamCount: 1, individualCount: 0, totalScore: 20, commonScope: "" }, generator);
+    const stored = (await getExamManagementData(classNumber, fixedId)).selected!.questions[0]!;
+    expect(stored.sourceEvidence).toEqual([{ sourceType: "report", sourceKey: selectedSource!.key, sourceLabel: selectedSource!.label, excerpt: selectedSource!.text }]);
+  });
+
+  it("preserves the exact team and personal evidence when documents change during generation", async () => {
+    const db = await getDb();
+    const expected = new Map<string, Array<{ key: string; label: string; text: string }>>();
+    const revisions = (await db.query("SELECT * FROM document_revisions WHERE document_id = $1 ORDER BY id", [reportId])).rows;
+    const snapshots = (await db.query("SELECT * FROM plan_document_snapshots WHERE plan_id = 'exam_test_plan' ORDER BY id")).rows;
+    const generator: ExamGenerator = {
+      async generateCommon() { return []; },
+      async generateTeam({ team }) {
+        const teamSources = team.sources.filter(source => source.key.endsWith(".method") || source.key.endsWith(".analysis"));
+        expect(teamSources).toHaveLength(2);
+        expected.set("team", structuredClone(teamSources));
+        for (const student of team.students) {
+          const sources = student.sources.filter(source => source.key.startsWith("role.") || source.key.endsWith(".observations"));
+          expect(sources).toHaveLength(2);
+          expected.set(student.studentRef, structuredClone(sources));
+        }
+        // Change saved originals after preparation, while the generator is running.
+        await db.query("UPDATE investigation_plans SET form_data = $1 WHERE id = 'exam_test_plan'", [JSON.stringify({ method: "생성 도중 바뀐 계획" })]);
+        await db.query("UPDATE reports SET form_data = $1 WHERE id = $2", [JSON.stringify({ analysis: "생성 도중 바뀐 보고서" }), reportId]);
+        await db.query("UPDATE report_member_roles SET role_description = '생성 도중 바뀐 역할' WHERE report_id = $1", [reportId]);
+        await db.query("UPDATE experiment_journals SET observations = '생성 도중 바뀐 관찰' WHERE session_id = $1", [sessionId]);
+        return {
+          teamQuestions: [question("생성 중 고정 팀 근거", teamSources.map(source => source.key))],
+          individualQuestions: team.students.map(student => ({ studentRef: student.studentRef, questions: [question(student.studentRef, expected.get(student.studentRef)!.map(source => source.key))] })),
+        };
+      },
+    };
+    const generatedId = await generateExamSet("teacher_bootstrap", { classNumber, title: "생성 중 원문 변경", commonCount: 0, teamCount: 1, individualCount: 1, totalScore: 20, commonScope: "" }, generator);
+    const data = (await getExamManagementData(classNumber, generatedId)).selected!;
+    expect(data.questions).toHaveLength(3);
+    for (const [index, studentId] of activeIds.entries()) {
+      const paper = data.papers.find(item => item.studentId === studentId)!;
+      const items = questionsForPaper(data, paper);
+      expect(items).toHaveLength(2);
+      for (const item of items) {
+        const sources = expected.get(item.scope === "team" ? "team" : `S${index + 1}`)!;
+        expect(item.sourceEvidence).toEqual(sources.map(source => ({ sourceType: source.key.split(".")[0], sourceKey: source.key, sourceLabel: source.label, excerpt: source.text })));
+      }
+    }
+    expect(JSON.stringify(data.questions)).not.toContain("생성 도중 바뀐");
+    expect((await db.query("SELECT observations FROM experiment_journals WHERE session_id = $1", [sessionId])).rows.every(row => row.observations === "생성 도중 바뀐 관찰")).toBe(true);
+    expect((await db.query("SELECT * FROM document_revisions WHERE document_id = $1 ORDER BY id", [reportId])).rows).toEqual(revisions);
+    expect((await db.query("SELECT * FROM plan_document_snapshots WHERE plan_id = 'exam_test_plan' ORDER BY id")).rows).toEqual(snapshots);
   });
 
   it("confirms, prints, grades, and publishes only the active student's own result", async () => {
@@ -135,5 +232,17 @@ describe("fair, source-grounded exam workflow", () => {
     expect(await getPublishedStudentExamResult(activeIds[0])).toMatchObject({ totalScore: 40, maxScore: 40 });
     expect(await getPublishedStudentExamResult(activeIds[1])).toBeNull();
     expect(await getPublishedStudentExamResult("exam_test_inactive")).toBeNull();
+  });
+
+  it("creates an editable correction copy while preserving the confirmed original and results", async () => {
+    const correctionId = await createCorrectionExamSet("teacher_bootstrap", examSetId, "문항 표현 교정");
+    const original = (await getExamManagementData(classNumber, examSetId)).selected!;
+    const correction = (await getExamManagementData(classNumber, correctionId)).selected!;
+    expect(original.status).toBe("confirmed");
+    expect(original.papers.some((paper) => paper.result?.publishedAt)).toBe(true);
+    expect(correction).toMatchObject({ status: "draft", revisionNumber: 2, parentExamSetId: examSetId, correctionReason: "문항 표현 교정" });
+    expect(correction.papers.every((paper) => paper.result === null && paper.status === "generated")).toBe(true);
+    expect(correction.questions).toHaveLength(original.questions.length);
+    expect(new Set(correction.questions.map((question) => question.id))).not.toEqual(new Set(original.questions.map((question) => question.id)));
   });
 });

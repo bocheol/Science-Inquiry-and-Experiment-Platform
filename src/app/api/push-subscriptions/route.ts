@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import {
   getPushPublicConfiguration,
+  isSafePushEndpoint,
   removePushSubscription,
   savePushSubscription,
 } from "@/lib/push-notifications";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
-const endpointSchema = z.string().url().max(4000).refine((value) => value.startsWith("https://"), "안전한 구독 주소가 아닙니다.");
+const endpointSchema = z.string().url().max(4000).refine(isSafePushEndpoint, "안전한 구독 주소가 아닙니다.");
 const subscriptionSchema = z.object({
   endpoint: endpointSchema,
   expirationTime: z.number().nullable().optional(),
@@ -16,7 +19,7 @@ const subscriptionSchema = z.object({
     auth: z.string().min(8).max(500),
   }),
 });
-const deleteSchema = z.object({ endpoint: endpointSchema });
+const deleteSchema = z.object({ endpoint: z.string().url().max(4000) });
 
 async function requireStudent() {
   const user = await getCurrentUser();
@@ -32,20 +35,20 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await requireStudent();
   if (!user) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = subscriptionSchema.safeParse(await request.json().catch(() => null));
+  const parsed = subscriptionSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "기기 알림 정보를 확인해 주세요." }, { status: 400 });
   try {
     await savePushSubscription(user, parsed.data, request.headers.get("user-agent") ?? "");
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ message: error instanceof Error ? error.message : "기기 알림을 켜지 못했습니다." }, { status: 400 });
+    return NextResponse.json({ message: userFacingMessage(error, "기기 알림을 켜지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status: 400 });
   }
 }
 
 export async function DELETE(request: Request) {
   const user = await requireStudent();
   if (!user) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  const parsed = deleteSchema.safeParse(await request.json().catch(() => null));
+  const parsed = deleteSchema.safeParse(await readJsonBody(request));
   if (!parsed.success) return NextResponse.json({ message: "해제할 기기 알림을 확인해 주세요." }, { status: 400 });
   await removePushSubscription(user, parsed.data.endpoint);
   return NextResponse.json({ ok: true });

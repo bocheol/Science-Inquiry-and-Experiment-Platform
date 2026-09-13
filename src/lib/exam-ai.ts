@@ -33,8 +33,9 @@ export type ExamGenerator = {
     count: number;
     scope: string;
     teamSummaries: Array<{ teamRef: string; topic: string; sources: ExamSourceItem[] }>;
+    requestId?: string;
   }): Promise<GeneratedExamQuestion[]>;
-  generateTeam(input: { team: TeamExamSource; teamCount: number; individualCount: number }): Promise<TeamGenerationResult>;
+  generateTeam(input: { team: TeamExamSource; teamCount: number; individualCount: number; requestId?: string }): Promise<TeamGenerationResult>;
 };
 
 const rubricSchema = z.object({ criterion: z.string(), points: z.number().int().min(1).max(100) });
@@ -85,7 +86,7 @@ export const openAiExamGenerator: ExamGenerator = {
         instructions: `${EXAM_INSTRUCTIONS}\n\n전체 공통 문항을 만드세요. 특정 팀의 실제 수치나 표현을 복사하지 말고, 여러 팀 자료에서 공통으로 필요한 탐구 역량을 파악해 새로운 중립 실험 자료·표·상황을 stimulus에 만드세요. 모든 학생이 같은 문항을 받습니다. sourceKeys는 빈 배열로 반환하세요.`,
         input: JSON.stringify({ requestedCount: input.count, assessmentScope: input.scope, anonymizedTeamSummaries: input.teamSummaries }),
         text: { format: zodTextFormat(commonSchema, "common_exam_questions") },
-      }),
+      }, input.requestId ? { headers: { "X-Client-Request-Id": input.requestId } } : undefined),
     );
     if (!response.output_parsed) throw new Error("공통 문항 형식을 확인하지 못했습니다.");
     return ensureCount(response.output_parsed.questions, input.count, "공통");
@@ -103,7 +104,7 @@ export const openAiExamGenerator: ExamGenerator = {
         instructions: `${EXAM_INSTRUCTIONS}\n\n팀 공통 문항은 팀의 계획서·보고서 source key만 사용하고 개인 일지는 사용하지 마세요. 개인화 문항은 해당 studentRef의 자료만 사용하며 다른 학생 자료를 섞지 마세요. 각 stimulus에는 답에 필요한 짧은 자료를 제시하고, 같은 범주의 문항은 사고 단계와 답변 분량이 비슷해야 합니다. 개인 자료가 부족하면 해당 학생에게 관찰과 해석 구분·추가 측정을 묻는 표준 대체 문항을 만드세요.`,
         input: JSON.stringify({ requestedTeamCount: input.teamCount, requestedIndividualCountPerStudent: input.individualCount, team: input.team }),
         text: { format: zodTextFormat(teamSchema, "team_and_individual_exam_questions") },
-      }),
+      }, input.requestId ? { headers: { "X-Client-Request-Id": input.requestId } } : undefined),
     );
     if (!response.output_parsed) throw new Error("팀·개인 문항 형식을 확인하지 못했습니다.");
     ensureCount(response.output_parsed.teamQuestions, input.teamCount, "팀 공통");

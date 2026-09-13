@@ -123,7 +123,7 @@ try {
   }
 
   await client.query(
-    "UPDATE users SET status = 'inactive' WHERE academic_year = $1 AND login_id = 'teacher' AND role = 'teacher'",
+    "UPDATE users SET status = 'inactive', session_version = session_version + 1 WHERE academic_year = $1 AND login_id = 'teacher' AND role = 'teacher'",
     [ACADEMIC_YEAR],
   );
 

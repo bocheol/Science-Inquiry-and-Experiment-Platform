@@ -29,3 +29,9 @@ service-account*.json
 /teacher-login.txt
 /teacher-accounts.txt
 .tmp-*/
+.tmp-*
+.env.*
+!.env.example
+.science-dev/
+work/
+*.cookies
