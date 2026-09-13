@@ -34,6 +34,18 @@
 
 ## 평소 작업 순서
 
+### 태블릿에서 Codex에 개발 지시하기
+
+작업실에는 Codex CLI 0.154.0을 함께 설치한다. Codespaces의 터미널에서 `codex login --device-auth`를 실행하고 안내된 공식 ChatGPT 페이지에서 본인 계정으로 로그인한다. 이 인증은 플랫폼이 학생에게 AI 답변을 제공할 때 쓰는 API 키와 별개다. 기기 코드 로그인을 사용할 수 없다면 [공식 인증 안내](https://learn.chatgpt.com/docs/auth)를 따른다. 로그인 정보는 Git에 저장하지 않는다.
+
+로그인 후 프로젝트 폴더에서 다음 명령으로 Astra·High를 선택해 시작한다.
+
+```bash
+codex -m gpt-6-astra -c 'model_reasoning_effort="high"'
+```
+
+그 안에 원하는 수정 내용을 한국어로 입력한다. 미리보기 서버는 별도 터미널에서 `pnpm dev`로 실행한다. 이 데스크톱 대화와 Codespaces의 Codex 대화는 별개이므로 `PROJECT_STATUS.md`와 `CURRENT_DECISIONS.md`로 작업 상태를 이어받는다. ChatGPT Work에서 이야기한 내용이 실행 중인 Codespace에 자동 전달되는 것으로 가정하지 않는다. [Codex CLI 안내](https://learn.chatgpt.com/docs/cli)
+
 요청 전달 → 수정 → `pnpm cloud:check` → 미리보기 확인 → GitHub에 저장 → 검토된 변경의 운영 배포 순서다. GitHub에 저장하는 것만으로 운영 사이트가 바뀌지는 않는다. 이번 자동 검증에는 운영 배포 작업이나 배포 자격정보가 없다.
 
 `pnpm cloud:check`는 환경 격리 검사, 기존 전체 자동 테스트, 운영 빌드, 타입 검사를 순서대로 실행한다. GitHub Actions도 같은 검사를 실행한다. 테스트 데이터를 운영 DB에 넣지 않는다.

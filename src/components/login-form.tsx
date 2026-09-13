@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/toast-provider";
 
-export function LoginForm() {
+export function LoginForm({ cloudPreview = false }: { cloudPreview?: boolean }) {
   const router = useRouter();
   const { showToast } = useToast();
   const [error, setError] = useState("");
@@ -52,7 +52,7 @@ export function LoginForm() {
       </button>
       {process.env.NODE_ENV !== "production" ? (
         <div className="notice-box">
-          로컬 데모: 교사 <b>teacher / teacher1234</b>, 학생 <b>10901 / student1234</b>
+          {cloudPreview ? "클라우드 개발 미리보기입니다. 개발용 계정으로 로그인하세요." : "로컬 개발 미리보기입니다. 개발용 계정으로 로그인하세요."}
         </div>
       ) : null}
     </form>

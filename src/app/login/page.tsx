@@ -20,7 +20,7 @@ export default async function LoginPage() {
         <div className="auth-card">
           <h2>탐구실 입장</h2>
           <p>교사에게 받은 아이디와 비밀번호를 입력하세요.</p>
-          <LoginForm />
+          <LoginForm cloudPreview={process.env.NODE_ENV !== "production" && (process.env.SCIENCE_CLOUD_DEV === "1" || process.env.CODESPACES === "true")} />
           <InstallAppGuide />
         </div>
       </section>
