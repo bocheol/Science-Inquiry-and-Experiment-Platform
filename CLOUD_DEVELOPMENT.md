@@ -56,6 +56,10 @@ codex -m gpt-6-astra -c 'model_reasoning_effort="high"'
 
 ## 다시 열었을 때
 
+- 현재 작업실은 `https://glorious-space-fishstick-v65x9jwpq9p7fpx76.github.dev/`다. 같은 GitHub 계정으로 태블릿에서 열면 노트북 없이 작업할 수 있다. 이 로컬 데스크톱 대화 자체가 클라우드로 옮겨지는 것은 아니며, 작업실 터미널의 Codex가 클라우드 파일을 수정한다.
+- 현재 실제 작업 폴더는 `/workspaces/Science-Inquiry-and-Experiment-Platform`이다. 새 컨테이너 설정의 `/workspaces/science-inquiry`와 다를 수 있으므로 터미널에서 현재 프로젝트 폴더를 확인한다. 해당 폴더의 `package.json`과 `scripts/cloud-dev.mjs`를 기준으로 실행한다.
+- 2026-09-13 계획서 집중/분할 UI는 사용자 요청으로 폐기했다. 다음 작업은 두 문서 전체를 항목 높이에 맞춰 좌우 비교하는 화면이다. 최신 요구·반영 승인 범위는 `CURRENT_DECISIONS.md` 맨 위를 읽는다.
+
 - 미리보기 서버가 응답하지 않으면 먼저 기존 실행 터미널과 3000번 포트를 확인한다. 서버가 종료된 경우 `/workspaces/science-inquiry`에서 `node scripts/cloud-dev.mjs dev`로 실행할 수 있다. 이는 `pnpm dev`와 같은 개발 실행기이며 운영 연결 차단을 유지한다. 다른 경로에서 패키지 전체 재설치 안내가 나타나면 바로 승인하지 말고 기존 작업 폴더를 확인한다.
 
 - 작업실 열기 → `pnpm cloud:status` → `pnpm dev`.
