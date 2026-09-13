@@ -235,7 +235,7 @@ async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
        ORDER BY m.submitted_at ASC, m.id ASC`, [teamId, cycle?.id ?? null],
   );
   const materialView = (row: (typeof materialResult.rows)[number]): MaterialRequestView => ({
-    id: row.id, items: parseJson(row.form_data, []), totalAmount: row.total_amount,
+    id: row.id, items: parseJson(row.form_data, []), totalAmount: Number(row.total_amount),
     budgetStatus: row.budget_status, syncStatus: row.sync_status, syncError: row.sync_error,
     isPractice: row.is_practice, submittedAt: new Date(row.submitted_at).toISOString(),
   });

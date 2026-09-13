@@ -401,6 +401,7 @@ a {
 .page-title p { margin: 8px 0 0; color: var(--muted); }
 
 .card {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -561,7 +562,7 @@ a {
 .chat-messages { flex: 1; min-height: 430px; max-height: 62vh; overflow-y: auto; padding: 22px; }
 .message-row { display: flex; margin: 10px 0; }
 .message-row.user { justify-content: flex-end; }
-.message-bubble { max-width: min(78%, 680px); padding: 12px 15px; border-radius: 16px; background: #eef3ef; white-space: pre-wrap; }
+.message-bubble { min-width: 0; max-width: min(78%, 680px); padding: 12px 15px; border-radius: 16px; background: #eef3ef; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-row.user .message-bubble { background: var(--brand); color: white; border-bottom-right-radius: 5px; }
 .message-row.assistant .message-bubble { border-bottom-left-radius: 5px; }
 .message-meta { display: block; margin-bottom: 5px; font-size: 12px; opacity: .7; font-weight: 750; }
@@ -584,9 +585,20 @@ a {
 .plan-ai-review ul { margin: 8px 0 0; padding-left: 20px; }
 .plan-ai-review li + li { margin-top: 6px; }
 .plan-ai-review p { white-space: pre-wrap; }
-.plan-field { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.plan-ai-review > .button + .section-subtitle,
+.document-history > .button + .section-subtitle { margin: 10px 0 18px; }
+.plan-field { min-width: 0; padding: 16px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .plan-field:first-child { padding-top: 0; }
 .plan-field:last-child { border-bottom: 0; }
+.teacher-document-workspace { grid-template-columns: minmax(0, 1fr); }
+.teacher-document-card > .plan-field,
+.teacher-document-card > .plan-ai-review,
+.teacher-document-card > .approval-complete-panel,
+.teacher-document-card > .approval-change-guard,
+.teacher-document-card > .field,
+.teacher-document-card > .toolbar-group,
+.teacher-document-card > .document-history,
+.teacher-document-card > .report-read-cover { width: min(100%, 920px); margin-left: auto; margin-right: auto; }
 .field-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .lock-label { color: #9b6813; font-size: 12px; font-weight: 750; }
 .save-state { color: var(--muted); font-size: 12px; }
@@ -832,9 +844,15 @@ a {
 }
 .document-history { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
 .history-list { display: grid; gap: 8px; margin-top: 12px; max-height: 360px; overflow-y: auto; }
-.history-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.history-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .history-item > div { display: grid; gap: 3px; min-width: 0; }
-.history-item span { color: var(--muted); font-size: 12px; }
+.history-item span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.history-item .button { white-space: nowrap; }
+@media (max-width: 640px) {
+  .history-item { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-item > div { grid-column: 1 / -1; }
+  .history-item .button { width: 100%; white-space: normal; }
+}
 .teacher-help-chat { margin-top: 18px; }
 .help-chat-log { display: grid; gap: 10px; max-height: 360px; overflow-y: auto; margin: 16px 0; padding: 12px; background: var(--surface-soft); border-radius: 14px; }
 .help-chat-message { max-width: 88%; padding: 11px 13px; border-radius: 14px; background: white; border: 1px solid var(--border); }

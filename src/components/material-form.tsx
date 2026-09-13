@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MATERIAL_BUDGET_WON } from "@/lib/constants";
 import { PRACTICE_MATERIAL_LABEL } from "@/lib/material-practice";
 import type { InquiryData } from "@/lib/inquiry-data";
 import { normalizeMaterialLink } from "@/lib/material-links";
@@ -110,7 +109,7 @@ export function MaterialForm({ data, currentUserId, onRefresh }: { data: Inquiry
         <div className="page-title" style={{ marginBottom: 12 }}><div><h1 style={{ fontSize: 26 }}>준비물 신청</h1><p>Google Sheet와 같은 열 순서로 입력합니다. 같은 품목도 다른 팀과 합치지 않습니다.</p></div>{data.materials ? <span className={`badge ${data.materials.syncStatus === "failed" ? "feedback" : ""}`}>{data.materials.isPractice ? PRACTICE_MATERIAL_LABEL : data.materials.syncStatus === "synced" ? "시트 반영됨" : data.materials.syncStatus === "failed" ? "전송 실패" : "전송 대기"}</span> : null}</div>
         <div className="notice-box"><b>자동 입력:</b> {data.team.teamNumber}조 · 팀장 학번/이름 {leader ? `${leader.loginId} ${leader.name}` : "(선생님 지정 필요)"}</div>
         <div className="notice-box"><b>상품 링크:</b> 모바일 쇼핑 앱의 공유 문구 전체를 붙여넣어도 됩니다. 지원 쇼핑몰의 모바일 주소는 PC용 주소로 자동 변환하며, 변환할 수 없는 모바일 전용 주소는 제출 전에 알려드립니다.</div>
-        {total > MATERIAL_BUDGET_WON ? <div className="warning-box"><b>예산 초과</b> — 5만원을 넘었지만 제출할 수 있습니다. 선생님 승인이 필요합니다.</div> : null}
+        <p className="section-subtitle">예산 상한 없이 신청 금액 그대로 전송합니다.</p>
         {error ? <div className="error-box">{error}</div> : null}
         {notice ? <div className="notice-box">{notice}</div> : null}
       </div>

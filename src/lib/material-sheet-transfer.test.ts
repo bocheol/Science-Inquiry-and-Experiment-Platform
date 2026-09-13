@@ -112,3 +112,53 @@ it("rejects duplicate headers and missing previous target metadata before writin
   await expect(prepareMaterialSheetTransfer({ ...input, previousOperationId: "lost-target" }, "bad-target")).rejects.toThrow("입력 위치");
   expect(mutations).toBe(0);
 });
+
+function schoolTemplate() {
+  return [[], ["조", "학번", "조장", "품명", "규격(선택옵션)", "단가", "갯수", "배송비", "총액", "링크"],
+    [], [], [], [], [], [1, "existing-id", "existing-name", "existing-material"], [], [], [], ["1조", "", "", "", "", "", "", "", "=SUM(I8:I11)"],
+    ["종합", "", "", "", "", "", "", "", "=SUM(I12)"]] as (string | number)[][];
+}
+
+it("creates a missing team before the footer, copies only appearance and includes its subtotal exactly once", async () => {
+  rows = schoolTemplate();
+  const before = structuredClone(rows);
+  const batch = await prepareMaterialSheetTransfer({ ...input, layout: "team_sections", teamNumber: 7 }, "new-team");
+  expect(batch.requests[0]).toMatchObject({ insertDimension: { range: { startIndex: 12, endIndex: 17 } } });
+  expect(batch.requests.filter(request => request.copyPaste)).toHaveLength(2);
+  expect(batch.requests.filter(request => request.copyPaste).every(request => (request.copyPaste as { pasteType: string }).pasteType === "PASTE_FORMAT")).toBe(true);
+  expect(batch.requests[3]).toMatchObject({ updateCells: { range: { startRowIndex: 17, endRowIndex: 18, startColumnIndex: 8 },
+    rows: [{ values: [{ userEnteredValue: { formulaValue: "=SUM(I12,I17)" } }] }] } });
+  expect(batch.requests[4]).toMatchObject({ updateCells: { range: { startRowIndex: 12, endRowIndex: 17 } } });
+  expect(JSON.stringify(batch.requests)).not.toContain("existing-material");
+  expect(rows).toEqual(before);
+  loseReply = true;
+  await executeMaterialSheetTransfer(input.spreadsheetId, batch);
+  await executeMaterialSheetTransfer(input.spreadsheetId, batch);
+  expect(mutations).toBe(1);
+});
+
+it("uses the whole tab and updates a team beyond row 200 without creating another section", async () => {
+  rows = [...Array.from({ length: 210 }, () => []), [" 7 "], [], ["7조"]];
+  const batch = await prepareMaterialSheetTransfer({ ...input, layout: "team_sections", teamNumber: 7 }, "late-team");
+  expect(mocks.request.mock.calls.some(call => decodeURIComponent(call[1]).includes("A1:J1000"))).toBe(true);
+  expect(batch.requests.some(request => request.insertDimension)).toBe(false);
+  expect(batch.requests[0]).toMatchObject({ updateCells: { range: { startRowIndex: 210, endRowIndex: 213 } } });
+});
+
+it("rejects partial, duplicate and interleaved sections instead of overwriting another team", async () => {
+  for (const tail of [[[7]], [[7], [8], ["7조"]], [[7], ["7조"], [7], ["7조"]], [["7조"]]]) {
+    rows = [...Array.from({ length: 7 }, () => []), ...tail];
+    await expect(prepareMaterialSheetTransfer({ ...input, layout: "team_sections", teamNumber: 7 }, "ambiguous")).rejects.toThrow("하나만");
+  }
+  expect(mutations).toBe(0);
+});
+
+it("does not invent a template or replace an unfamiliar grand total formula", async () => {
+  for (const total of ["", "=SUM(I8:I12)", "=SUM(I12,I20)"]) {
+    rows = schoolTemplate(); rows[12][8] = total;
+    await expect(prepareMaterialSheetTransfer({ ...input, layout: "team_sections", teamNumber: 7 }, "unknown-total")).rejects.toThrow("시트 구조");
+  }
+  rows = schoolTemplate(); rows[11][3] = "7조";
+  await expect(prepareMaterialSheetTransfer({ ...input, layout: "team_sections", teamNumber: 7 }, "misplaced-label")).rejects.toThrow("시트 구조");
+  expect(mutations).toBe(0);
+});

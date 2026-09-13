@@ -1,4 +1,3 @@
-import { MATERIAL_BUDGET_WON } from "@/lib/constants";
 import { audit, getDb } from "@/lib/db";
 import { SPREADSHEET_ID } from "@/lib/google-sheets";
 import { executeMaterialSheetTransfer, prepareMaterialSheetTransfer, type MaterialSheetBatch, type MaterialSheetSnapshot } from "@/lib/material-sheet-transfer";
@@ -9,7 +8,13 @@ import { lockStudentsTeams } from "@/lib/team-mutation-locks";
 import { UserFacingError, userFacingMessage } from "@/lib/user-facing-error";
 
 export function materialTotal(items: MaterialItem[]) {
-  return items.reduce((sum, item) => sum + item.unitPrice * item.quantity + item.shipping, 0);
+  return items.reduce((sum, item) => {
+    if (![item.unitPrice, item.quantity, item.shipping].every(Number.isSafeInteger)
+      || item.unitPrice < 0 || item.shipping < 0 || item.quantity < 1) throw new UserFacingError("가격과 배송비는 0 이상의 정수, 수량은 1 이상의 정수로 입력해 주세요.");
+    const total = sum + item.unitPrice * item.quantity + item.shipping;
+    if (!Number.isSafeInteger(total)) throw new UserFacingError("금액이 정확하게 계산할 수 있는 숫자 범위를 벗어났습니다.");
+    return total;
+  }, 0);
 }
 function sameMaterialItems(left: MaterialItem[], right: MaterialItem[]) {
   const keys = ["name", "specification", "unitPrice", "quantity", "shipping", "link"] as const;
@@ -29,7 +34,7 @@ type RequestRow = {
   sync_snapshot: MaterialSheetSnapshot | string | null; sync_operation_id: string | null; sync_batch: MaterialSheetBatch | string | null;
 };
 type Input = { submissionId: string; sessionId: string; cycleId?: string; teamId: string; actorId: string; items: MaterialItem[] };
-const result = (row: RequestRow, syncStatus: string, syncError: string | null = null) => ({ total: row.total_amount, budgetStatus: row.budget_status, syncStatus, syncError });
+const result = (row: RequestRow, syncStatus: string, syncError: string | null = null) => ({ total: Number(row.total_amount), budgetStatus: row.budget_status, syncStatus, syncError });
 const conflict = () => new UserFacingError("준비물 신청이 변경되었거나 이전 전송 확인이 필요합니다. 작성 내용은 유지되며, 담당 교사가 재전송 상태를 확인한 뒤 다시 제출해 주세요.");
 const demoMessage = "교사용 학생 계정의 연습 제출은 Google Sheet에 반영하지 않습니다.";
 
@@ -117,7 +122,7 @@ async function prepareMaterialRequest(db: PoolClient, input: Input, retry: boole
     if (snapshot) snapshot = { ...snapshot, items: input.items, submittedAt: new Date().toISOString(), previousOperationId: saved?.sync_operation_id ?? undefined };
     const total = materialTotal(input.items);
     const client = db;
-    const values = [JSON.stringify(input.items), total, total > MATERIAL_BUDGET_WON ? "over_budget" : "within_budget", snapshot ? JSON.stringify(snapshot) : null, operationId];
+    const values = [JSON.stringify(input.items), total, "within_budget", snapshot ? JSON.stringify(snapshot) : null, operationId];
     const write = saved ? await client.query<RequestRow>(`UPDATE material_requests SET form_data = $1, total_amount = $2,
       budget_status = $3, sync_snapshot = $4, sync_operation_id = $5, sync_batch = NULL, sync_status = 'pending', sync_error = NULL, submitted_at = CURRENT_TIMESTAMP
       WHERE id = $6 AND form_data = $7::jsonb AND (sync_operation_id = $8 OR (sync_operation_id IS NULL AND $8::text IS NULL)) RETURNING *`,

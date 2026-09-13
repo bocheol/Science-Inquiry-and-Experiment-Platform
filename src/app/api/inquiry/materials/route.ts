@@ -10,9 +10,9 @@ import { UserFacingError, userFacingMessage } from "@/lib/user-facing-error";
 const itemSchema = z.object({
   name: z.string().trim().min(1).max(500),
   specification: z.string().trim().max(500),
-  unitPrice: z.number().int().min(0).max(100_000_000),
+  unitPrice: z.number().int().min(0),
   quantity: z.number().int().min(1).max(10_000),
-  shipping: z.number().int().min(0).max(10_000_000),
+  shipping: z.number().int().min(0),
   link: z.string().trim().max(5000),
 });
 const schema = z.object({

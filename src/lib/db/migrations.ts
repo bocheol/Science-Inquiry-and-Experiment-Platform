@@ -352,6 +352,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     );
     CREATE INDEX idx_discussion_push_pending ON discussion_push_outbox(status, next_attempt_at);`,
   },
+  {
+    version: "0012",
+    name: "material_amount_without_budget_ceiling",
+    sql: "ALTER TABLE material_requests ALTER COLUMN total_amount TYPE BIGINT;",
+  },
 ];
 
 function checksum(migration: DatabaseMigration) {

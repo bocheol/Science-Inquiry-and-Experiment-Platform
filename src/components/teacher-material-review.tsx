@@ -58,7 +58,7 @@ export function TeacherMaterialReview({ latest, pending = [], readOnly }: {
     return <>
       <span className={`badge ${item.syncStatus === "failed" ? "feedback" : ""}`}>{item.isPractice ? PRACTICE_MATERIAL_LABEL : item.syncStatus === "synced" ? "시트 반영" : item.syncStatus === "failed" ? "전송 실패" : "전송 대기"}</span>
       {item.submittedAt ? <p className="section-subtitle">신청 시각: {submittedTime(item.submittedAt)}</p> : null}
-      <p>합계 <b>{item.totalAmount.toLocaleString()}원</b> {item.budgetStatus === "over_budget" ? <span className="badge pending">예산 초과</span> : null}</p>
+      <p>합계 <b>{item.totalAmount.toLocaleString()}원</b></p>
       <ul>{item.items.map((value, index) => <li key={index}>{value.name}{value.specification ? ` (${value.specification})` : ""} · {value.quantity}개 · {(value.unitPrice * value.quantity + value.shipping).toLocaleString()}원{value.link ? <p style={{ overflowWrap: "anywhere" }}>{value.link}</p> : null}</li>)}</ul>
       {item.syncError ? <div className="warning-box">{item.syncError}</div> : null}
       {!readOnly && !item.isPractice && item.syncStatus !== "synced" ? <button className="button ghost" onClick={() => retry(item)} disabled={busy !== null}>{busy === item.id ? "전송 확인 중…" : "Google Sheet 재전송"}</button> : null}

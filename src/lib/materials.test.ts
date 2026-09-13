@@ -3,6 +3,14 @@ import { normalizeMaterialLink } from "@/lib/material-links";
 import { materialTotal, resolveClubSheetTab } from "@/lib/materials";
 
 describe("materialTotal", () => {
+  it("allows amounts above the former budget and 32-bit storage limit", () => {
+    expect(materialTotal([{ name: "장비", specification: "", unitPrice: 3_000_000_000, quantity: 2, shipping: 20_000_000, link: "" }])).toBe(6_020_000_000);
+  });
+  it("rejects inexact totals and invalid numeric input rather than silently rounding money", () => {
+    for (const unitPrice of [-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER]) {
+      expect(() => materialTotal([{ name: "장비", specification: "", unitPrice, quantity: 2, shipping: 0, link: "" }])).toThrow();
+    }
+  });
   it("adds per-item quantity and per-row shipping exactly once", () => {
     expect(materialTotal([
       { name: "0.1 M HCl", specification: "500 mL", unitPrice: 12_000, quantity: 2, shipping: 3_000, link: "" },

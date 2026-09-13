@@ -58,15 +58,49 @@ export async function prepareMaterialSheetTransfer(input: MaterialSheetSnapshot,
     `/values/${encodeURIComponent(`${quote(input.sheetName)}!${range}`)}?valueRenderOption=FORMULA`)).values ?? [];
   let targetRange: GridRange;
   if (input.layout === "team_sections") {
-    const rows = await readRows("A1:J200");
-    const starts = rows.flatMap((row, index) => index >= 7 && String(row[0] ?? "") === String(input.teamNumber) ? [index] : []);
-    const start = starts[0];
-    const end = rows.findIndex((row, index) => index > start && String(row[0] ?? "").trim() === `${input.teamNumber}조`);
-    if (starts.length !== 1 || end < 0) throw new UserFacingError("해당 조의 입력 영역을 하나만 확인할 수 있어야 전송할 수 있습니다.");
-    const capacity = Math.max(end - start, input.items.length);
-    if (capacity > end - start) requests.push({ insertDimension: {
+    const rows = await readRows(`A1:J${sheet.gridProperties.rowCount}`);
+    const label = (row: (string | number)[]) => String(row[0] ?? "").trim();
+    const starts = rows.flatMap((row, index) => index >= 7 && label(row) === String(input.teamNumber) ? [index] : []);
+    const ends = rows.flatMap((row, index) => index >= 7 && label(row) === `${input.teamNumber}조` ? [index] : []);
+    const invalid = () => new UserFacingError("해당 조의 입력 영역을 하나만 확인할 수 있어야 전송할 수 있습니다.");
+    let start = starts[0];
+    let end = ends[0];
+    let capacity: number;
+    if (starts.length === 0 && ends.length === 0) {
+      // Create only in the verified school template. A partial/ambiguous team
+      // or an unfamiliar footer must be repaired explicitly, never overwritten.
+      const headers = ["조", "학번", "조장", "품명", "규격(선택옵션)", "단가", "갯수", "배송비", "총액", "링크"];
+      const totals = rows.flatMap((row, index) => label(row) === "종합" ? [index] : []);
+      const total = totals[0];
+      const totalFormula = String(rows[total]?.[8] ?? "");
+      const references = totalFormula.match(/^=SUM\((\$?I\$?\d+(?:\s*,\s*\$?I\$?\d+)*)\)$/i);
+      const templateStart = rows.findIndex((row, index) => index >= 7 && /^\d+$/.test(label(row)));
+      const templateEnd = rows.findIndex((row, index) => index > templateStart && label(row) === `${label(rows[templateStart] ?? [])}조`);
+      if (!headers.every((value, index) => String(rows[1]?.[index] ?? "").trim() === value)
+        || totals.length !== 1 || !references || templateStart < 0 || templateEnd <= templateStart || templateEnd >= total
+        || rows.slice(templateStart + 1, templateEnd).some(row => label(row) !== "")
+        || references[1].split(",").some(ref => Number(ref.replace(/[^0-9]/g, "")) > total)
+        || rows.some(row => row.some(value => String(value).trim() === `${input.teamNumber}조`))) {
+        throw new UserFacingError("조 영역이 없지만 기존 시트 양식과 종합 합계를 안전하게 확인할 수 없습니다. 담당 교사가 시트 구조를 확인해 주세요.");
+      }
+      start = total;
+      capacity = Math.max(templateEnd - templateStart, input.items.length);
+      end = start + capacity;
+      requests.push({ insertDimension: { range: { sheetId: sheet.sheetId, dimension: "ROWS", startIndex: start, endIndex: end + 1 }, inheritFromBefore: true } });
+      const range = (from: number, to: number) => ({ sheetId: sheet.sheetId, startRowIndex: from, endRowIndex: to, startColumnIndex: 0, endColumnIndex: 10 });
+      // Copy appearance only, never another team's identity, materials or totals.
+      requests.push({ copyPaste: { source: range(templateStart, templateStart + 1), destination: range(start, end), pasteType: "PASTE_FORMAT" } });
+      requests.push({ copyPaste: { source: range(templateEnd, templateEnd + 1), destination: range(end, end + 1), pasteType: "PASTE_FORMAT" } });
+      requests.push({ updateCells: { range: { ...range(end + 1, end + 2), startColumnIndex: 8, endColumnIndex: 9 },
+        rows: [{ values: [formula(`${totalFormula.slice(0, -1)},I${end + 1})`)] }], fields: "userEnteredValue" } });
+    } else {
+      if (starts.length !== 1 || ends.length !== 1 || end <= start
+        || rows.slice(start + 1, end).some(row => label(row) !== "")) throw invalid();
+      capacity = Math.max(end - start, input.items.length);
+      if (capacity > end - start) requests.push({ insertDimension: {
       range: { sheetId: sheet.sheetId, dimension: "ROWS", startIndex: end, endIndex: end + capacity - (end - start) }, inheritFromBefore: true,
-    } });
+      } });
+    }
     const values = Array.from({ length: capacity }, (_, offset) => {
       const item = input.items[offset];
       const row = start + offset + 1;

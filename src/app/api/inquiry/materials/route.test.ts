@@ -20,6 +20,12 @@ it("passes the displayed cycle to the save boundary", async () => {
   expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ cycleId: "displayed-cycle", actorId: "synthetic-student", teamId: "synthetic-team" }));
 });
 
+it("accepts prices and shipping above the former monetary caps", async () => {
+  const items = [{ ...body.items[0], unitPrice: 3_000_000_000, shipping: 20_000_000 }];
+  expect((await POST(request({ ...body, cycleId: "displayed-cycle", items }))).status).toBe(200);
+  expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ items }));
+});
+
 it("hides unexpected storage details and preserves explicit material guidance", async () => {
   mocks.save.mockRejectedValueOnce(new Error("postgresql://internal:secret@private/materials"));
   const failed = await POST(request({ ...body, cycleId: "displayed-cycle" }));

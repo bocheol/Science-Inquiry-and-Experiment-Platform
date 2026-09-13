@@ -78,7 +78,7 @@ function TeacherReportReviewContent({ data, readOnly, draftKey }: { data: Inquir
     router.refresh();
   }
 
-  return <section className="card card-body">
+  return <section className="card card-body teacher-document-card">
     <div className="toolbar"><div><h2 className="section-heading">팀 최종보고서</h2><p className="section-subtitle">학교 양식의 보고서 내용과 팀원별 역할을 확인합니다.</p></div><span className={`badge ${data.report.status === "feedback" ? "feedback" : data.report.status === "submitted" ? "pending" : ""}`}>{statusText[data.report.status] ?? data.report.status}</span></div>
     {error ? <div className="error-box">{error}</div> : null}
     {message ? <div className="notice-box">{message}</div> : null}

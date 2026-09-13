@@ -1,7 +1,6 @@
 export const ACADEMIC_YEAR = Number(process.env.ACADEMIC_YEAR ?? 2026);
 export const SESSION_COOKIE = "science_inquiry_session";
 export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24;
-export const MATERIAL_BUDGET_WON = 50_000;
 
 export const PLAN_FIELDS = [
   { key: "field", label: "탐구 분야", kind: "select" },

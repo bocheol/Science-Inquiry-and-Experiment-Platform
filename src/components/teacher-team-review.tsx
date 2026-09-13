@@ -118,8 +118,8 @@ function TeacherTeamReviewContent({ data, currentUserId, draftKey }: { data: Inq
       {data.session.cycle?.status === "active" ? <TeacherCycleSettings cycle={data.session.cycle} /> : null}
       <CycleAnalysisPanel data={data} audience="teacher" currentUserId={currentUserId} />
       <section className="card card-body"><DiscussionPanel key={data.session.cycle?.id} sessionId={data.session.id} cycleId={data.session.cycle?.id} currentUserId={currentUserId} members={data.members} readOnly canSummarize /></section>
-      <section className="grid two">
-        <article className="card card-body">
+      <section className="grid teacher-document-workspace">
+        <article className="card card-body teacher-document-card">
           <div className="toolbar"><h2 className="section-heading">탐구 계획서</h2><span className={`badge ${data.plan.reviewStatus}`}>{statusText[data.plan.reviewStatus]}</span></div>
           {data.plan.latestSubmission ? <p className="notice-box">제출본 {data.plan.latestSubmission.submissionNumber}번을 고정해 표시하고 있습니다. 학생이 이후 작성 중인 내용과 섞이지 않습니다.</p> : null}
           {displayedPlanFields.map((field) => {
