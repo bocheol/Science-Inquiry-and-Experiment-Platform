@@ -92,7 +92,7 @@ export function PlanEditor({ data, currentUserId, onRefresh }: { data: InquiryDa
         <button className="button secondary full" disabled={busy || !pending} onClick={() => void saveAll()}>임시 저장</button>
         <LegacyDocumentDraft values={legacyDraft} labels={Object.fromEntries(data.plan.fields.map((field) => [field.id, field.label]))} />
         <DocumentConflicts conflicts={conflicts} labels={Object.fromEntries(data.plan.fields.map((field) => [field.id, field.label]))} busy={busy} onUseRemote={useRemote} onKeepMine={keepMine} />
-        <DocumentHistoryPanel title="계획서" history={data.plan.history} canRestore={data.team.leaderUserId === currentUserId} onRestore={restore} />
+        <DocumentHistoryPanel scope={{ documentType: "plan", documentId: data.plan.id, cycleId: data.session.cycle!.id }} title="계획서" history={data.plan.history} canRestore={data.team.leaderUserId === currentUserId} onRestore={restore} />
       </aside>
     </div>
   );

@@ -93,6 +93,6 @@ function TeacherReportReviewContent({ data, readOnly, draftKey }: { data: Inquir
     {conflict ? <div className="warning-box"><p>초안을 작성한 뒤 보고서 내용이나 검토 상태가 바뀌었습니다. 위의 최신 보고서와 현재 피드백을 확인해 주세요. 작성한 초안은 보관됩니다.</p><button className="button secondary" disabled={busy} onClick={() => draft.change({ feedback, expected })}>최신 보고서를 확인하고 초안 유지</button></div> : null}
     {draft.pending ? <p className="save-state">아직 보내지 않은 피드백입니다. 이 탭에 복구용 초안으로 보관됩니다.</p> : null}
     <div className="toolbar-group"><button className="button" disabled={!draft.ready || busy || conflict || !canReview || data.report.status === "feedback"} onClick={() => review("reviewed")}>확인 완료</button><button className="button danger" disabled={!draft.ready || busy || conflict || !canReview || !feedback.trim()} onClick={() => review("feedback")}>수정 요청</button>{!canReview ? <span className="save-state">학생이 제출한 뒤 검토할 수 있습니다.</span> : null}</div></>}
-    <DocumentHistoryPanel title="보고서" history={data.report.history} canRestore={!readOnly} onRestore={restoreReport} />
+    <DocumentHistoryPanel scope={{ documentType: "report", documentId: data.report.id, cycleId: data.session.cycle!.id }} title="보고서" history={data.report.history} canRestore={!readOnly} onRestore={restoreReport} />
   </section>;
 }

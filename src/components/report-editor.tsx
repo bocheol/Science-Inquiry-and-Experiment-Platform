@@ -113,7 +113,7 @@ export function ReportEditor({ data, currentUserId, onRefresh }: { data: Inquiry
         <button className="button secondary full" disabled={busy || !pending} onClick={() => void saveAll()}>임시 저장</button>
         <LegacyDocumentDraft values={legacyDraft} labels={Object.fromEntries(data.report.fields.map((field) => [field.id, field.label]))} />
         <DocumentConflicts conflicts={conflicts} labels={Object.fromEntries(data.report.fields.map((field) => [field.id, field.label]))} busy={busy} onUseRemote={useRemote} onKeepMine={keepMine} />
-        <DocumentHistoryPanel title="보고서" history={data.report.history} canRestore={data.team.leaderUserId === currentUserId} onRestore={restore} />
+        <DocumentHistoryPanel scope={{ documentType: "report", documentId: data.report.id, cycleId: data.session.cycle!.id }} title="보고서" history={data.report.history} canRestore={data.team.leaderUserId === currentUserId} onRestore={restore} />
       </aside>
     </div>
   );

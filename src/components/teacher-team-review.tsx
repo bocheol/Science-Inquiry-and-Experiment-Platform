@@ -167,7 +167,7 @@ function TeacherTeamReviewContent({ data, currentUserId, draftKey }: { data: Inq
               )}
             </>
           ))}
-          <DocumentHistoryPanel title="계획서" history={data.plan.history} canRestore={!cycleReadOnly} onRestore={restorePlan} />
+          <DocumentHistoryPanel scope={{ documentType: "plan", documentId: data.plan.id, cycleId: data.session.cycle!.id }} title="계획서" history={data.plan.history} canRestore={!cycleReadOnly} onRestore={restorePlan} />
         </article>
         <div className="stack">
           <article className="card card-body">

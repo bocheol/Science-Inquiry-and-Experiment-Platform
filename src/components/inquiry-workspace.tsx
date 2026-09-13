@@ -15,6 +15,7 @@ import { DiscussionPanel } from "@/components/discussion-panel";
 import { ClubCustomTabPanel } from "@/components/club-custom-tab-panel";
 import { CycleAnalysisPanel } from "@/components/cycle-analysis-panel";
 import { ReadOnlyCycleDocument } from "@/components/read-only-cycle-document";
+import { PastRecordsPanel } from "@/components/past-records-panel";
 
 type Tab = "chat" | "records" | "plan" | "materials" | "journal" | "report" | "exam" | "evaluation" | `custom:${string}`;
 
@@ -74,6 +75,7 @@ export function InquiryWorkspace({ initialData, currentUserId }: { initialData: 
         <div><h1>{data.team.activityName ?? `${data.team.classNumber}반`} · {data.team.name}</h1><p>{data.session.selectedTopic || "AI와 탐구 주제를 찾고 있어요"}</p>{data.session.cycle ? <small>{data.session.cycle.origin === "legacy_unclassified" ? "기존 탐구 자료" : data.session.cycle.title}</small> : null}</div>
         <div className="member-list">{data.members.map((member) => <span className="member-pill" key={member.id}>{member.isLeader ? "⭐ " : ""}{member.name}</span>)}</div>
       </section>
+      <PastRecordsPanel audience="student" teamId={data.team.id} />
       <CycleAnalysisPanel data={data} audience="student" currentUserId={currentUserId} />
       <nav className="tabs" aria-label="탐구 메뉴">
         <a className="tab notice-tab-link" href="/notices">📢 공지·일정</a>
@@ -90,10 +92,10 @@ export function InquiryWorkspace({ initialData, currentUserId }: { initialData: 
       <div className="card workspace-panel">
         <div hidden={tab !== "records"}><DiscussionPanel key={data.session.cycle?.id ?? "uncategorized"} sessionId={data.session.id} cycleId={data.session.cycle?.id} currentUserId={currentUserId} members={data.members} readOnly={data.session.cycle?.status === "completed"} active={tab === "records"} /></div>
         {tab === "chat" ? <ChatPanel key={`${currentUserId}:${data.session.cycle?.id}`} data={data} currentUserId={currentUserId} onRefresh={refresh} /> : null}
-        {tab === "plan" || openedEditors.plan ? <div hidden={tab !== "plan"}>{cycleReadOnly ? <ReadOnlyCycleDocument title="팀 탐구 계획서" description={data.plan.description} fields={data.plan.fields} formData={data.plan.formData} /> : <PlanEditor key={`${currentUserId}:${data.plan.id}:${data.session.cycle?.id ?? "none"}:${data.plan.configVersionId ?? "default"}`} data={data} currentUserId={currentUserId} onRefresh={refresh} />}</div> : null}
+        {tab === "plan" || openedEditors.plan ? <div hidden={tab !== "plan"}>{cycleReadOnly ? <ReadOnlyCycleDocument scope={{ documentType: "plan", documentId: data.plan.id, cycleId: data.session.cycle!.id }} title="팀 탐구 계획서" description={data.plan.description} fields={data.plan.fields} formData={data.plan.formData} /> : <PlanEditor key={`${currentUserId}:${data.plan.id}:${data.session.cycle?.id ?? "none"}:${data.plan.configVersionId ?? "default"}`} data={data} currentUserId={currentUserId} onRefresh={refresh} />}</div> : null}
         {tab === "materials" ? cycleReadOnly ? <div className="notice-box">완료된 회차의 준비물 신청은 위의 탐구 회차 기록에 고정되어 있습니다.</div> : <MaterialForm key={data.session.cycle?.id ?? data.session.id} data={data} currentUserId={currentUserId} onRefresh={refresh} /> : null}
         {tab === "journal" || openedEditors.journal ? <div hidden={tab !== "journal"}>{cycleReadOnly ? <div className="notice-box">완료된 회차의 실험 일지는 변경할 수 없습니다.</div> : data.session.cycle ? <JournalPanel key={data.session.cycle.id} sessionId={data.session.id} cycleId={data.session.cycle.id} currentUserId={currentUserId} /> : null}</div> : null}
-        {tab === "report" || openedEditors.report ? <div hidden={tab !== "report"}>{cycleReadOnly ? <ReadOnlyCycleDocument title="팀 최종보고서" description={data.report.description} fields={data.report.fields} formData={data.report.formData} roles={data.report.roles} /> : <ReportEditor key={`${currentUserId}:${data.report.id}:${data.session.cycle?.id ?? "none"}:${data.report.configVersionId ?? "default"}`} data={data} currentUserId={currentUserId} onRefresh={refresh} />}</div> : null}
+        {tab === "report" || openedEditors.report ? <div hidden={tab !== "report"}>{cycleReadOnly ? <ReadOnlyCycleDocument scope={{ documentType: "report", documentId: data.report.id, cycleId: data.session.cycle!.id }} title="팀 최종보고서" description={data.report.description} fields={data.report.fields} formData={data.report.formData} roles={data.report.roles} /> : <ReportEditor key={`${currentUserId}:${data.report.id}:${data.session.cycle?.id ?? "none"}:${data.report.configVersionId ?? "default"}`} data={data} currentUserId={currentUserId} onRefresh={refresh} />}</div> : null}
         {tab === "exam" ? <ExamResultPanel teamId={data.team.id} /> : null}
         {tab === "evaluation" ? <EvaluationPanel key={`${currentUserId}:${data.team.id}`} teamId={data.team.id} currentUserId={currentUserId} /> : null}
         {data.customTabs.map((customTab) => tab === `custom:${customTab.id}` ? <ClubCustomTabPanel key={`${currentUserId}:${data.session.id}:${customTab.id}`} tab={customTab} sessionId={data.session.id} currentUserId={currentUserId} /> : null)}

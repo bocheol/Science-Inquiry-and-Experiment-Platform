@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useToast } from "@/components/toast-provider";
+import { DocumentVersionButton } from "@/components/document-version-comparison";
+import type { DocumentScope } from "@/lib/document-version-types";
 
 type HistoryItem = { id: string; action: string; actorName: string; createdAt: string };
 
@@ -10,6 +12,7 @@ const actionLabels: Record<string, string> = {
   teacher_approve: "교사 승인 전 상태",
   teacher_feedback: "교사 피드백 전 상태",
   teacher_review: "교사 확인 전 상태",
+  cycle_completed: "이 회차 최종 보존본",
   exam_evidence_capture: "시험 근거로 고정한 확인 보고서",
   restore_previous_state: "이전 복원 전 상태",
 };
@@ -22,11 +25,13 @@ function actionLabel(action: string) {
 
 export function DocumentHistoryPanel({
   title,
+  scope,
   history,
   canRestore,
   onRestore,
 }: {
   title: string;
+  scope: DocumentScope;
   history: HistoryItem[];
   canRestore: boolean;
   onRestore: (revisionId: string) => Promise<void>;
@@ -36,7 +41,7 @@ export function DocumentHistoryPanel({
   const [error, setError] = useState("");
 
   async function restore(item: HistoryItem) {
-    if (!window.confirm(`${item.actorName}님의 ${actionLabel(item.action)}로 복원할까요? 복원 직전 상태도 이력에 남습니다.`)) return;
+    if (!window.confirm(`${new Date(item.createdAt).toLocaleString("ko-KR")}에 기록된 ${actionLabel(item.action)}로 복원할까요? 기록 작업자: ${item.actorName}. 복원 직전 상태도 이력에 남습니다.`)) return;
     setBusyId(item.id);
     setError("");
     try { await onRestore(item.id); }
@@ -49,12 +54,14 @@ export function DocumentHistoryPanel({
 
   return <section className="document-history">
     <div className="toolbar"><h3 className="section-heading">{title} 변경 이력</h3><span className="badge">최근 {history.length}건</span></div>
-    <p className="section-subtitle">각 항목을 저장하기 직전의 전체 문서 상태입니다. 복원 직전 상태도 새 이력으로 남습니다.</p>
-    {!canRestore ? <div className="notice-box">이력은 볼 수 있지만 복원은 현재 팀장과 교사만 할 수 있습니다.</div> : null}
+    <DocumentVersionButton scope={scope} />
+    <p className="section-subtitle">주로 변경 작업 직전의 전체 문서 상태입니다. 복원 직전 상태도 새 이력으로 남습니다.</p>
+    {!canRestore ? <div className="notice-box">현재 화면에서는 이력을 읽고 비교할 수 있습니다.</div> : null}
     {error ? <div className="error-box" role="alert">{error}</div> : null}
     <div className="history-list">
       {history.map((item) => <div className="history-item" key={item.id}>
         <div><strong>{actionLabel(item.action)}</strong><span>{item.actorName} · {new Date(item.createdAt).toLocaleString("ko-KR")}</span></div>
+        <DocumentVersionButton scope={scope} initialRevisionId={item.id}>이 기록 비교</DocumentVersionButton>
         {canRestore ? <button className="button ghost" disabled={Boolean(busyId)} onClick={() => void restore(item)}>{busyId === item.id ? "복원 중…" : "이 상태로 복원"}</button> : null}
       </div>)}
       {!history.length ? <div className="empty-state">아직 복원할 변경 이력이 없습니다.</div> : null}
