@@ -125,16 +125,36 @@ it("blocks changed payloads during an unresolved send and preserves the first sn
   expect(mocks.prepare).toHaveBeenCalledTimes(2);
 });
 
-it("keeps a spreadsheet reservation after an uncertain write and releases only after retry succeeds", async () => {
+it("keeps an uncertain spreadsheet reservation while preserving later submissions as pending", async () => {
   const db = await getDb();
   mocks.sync.mockRejectedValueOnce(new Error("Synthetic uncertain write"));
   expect(await saveAndSyncMaterials(input("material-reservation"))).toMatchObject({ syncStatus: "failed" });
   expect((await db.query("SELECT * FROM material_sheet_dispatch")).rows).toHaveLength(1);
-  await expect(saveAndSyncMaterials(input("material-other-reservation"))).rejects.toThrow("이전 전송");
+  expect(await saveAndSyncMaterials(input("material-other-reservation"))).toMatchObject({
+    syncStatus: "pending", syncError: expect.stringContaining("플랫폼에 임시 저장"),
+  });
+  expect((await db.query("SELECT sync_status, sync_error FROM material_requests WHERE submission_id='material-other-reservation'")).rows[0])
+    .toMatchObject({ sync_status: "pending", sync_error: expect.stringContaining("플랫폼에 임시 저장") });
   expect(mocks.sync).toHaveBeenCalledTimes(1);
   await saveAndSyncMaterials(input("material-reservation"));
   expect(mocks.prepare).toHaveBeenCalledTimes(1);
   expect((await db.query("SELECT * FROM material_sheet_dispatch")).rows).toHaveLength(0);
+  expect(await saveAndSyncMaterials(input("material-other-reservation"))).toMatchObject({ syncStatus: "synced" });
+  expect(mocks.sync).toHaveBeenCalledTimes(3);
+});
+
+it("allows a queued unsent submission to be edited without losing its server draft", async () => {
+  const db = await getDb();
+  mocks.sync.mockRejectedValueOnce(new Error("Synthetic uncertain write"));
+  await saveAndSyncMaterials(input("material-edit-blocker"));
+  await saveAndSyncMaterials(input("material-edit-queued"));
+  const changed = [{ ...items[0], name: "Updated queued material" }];
+  expect(await saveAndSyncMaterials({ ...input("material-edit-queued"), items: changed })).toMatchObject({
+    syncStatus: "pending", syncError: expect.stringContaining("플랫폼에 임시 저장"),
+  });
+  expect((await db.query("SELECT form_data, sync_batch FROM material_requests WHERE submission_id='material-edit-queued'")).rows[0])
+    .toEqual({ form_data: changed, sync_batch: null });
+  expect(mocks.sync).toHaveBeenCalledTimes(1);
 });
 
 it("a late duplicate failure cannot demote a successful retry", async () => {

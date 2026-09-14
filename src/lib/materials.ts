@@ -37,6 +37,7 @@ type Input = { submissionId: string; sessionId: string; cycleId?: string; teamId
 const result = (row: RequestRow, syncStatus: string, syncError: string | null = null) => ({ total: Number(row.total_amount), budgetStatus: row.budget_status, syncStatus, syncError });
 const conflict = () => new UserFacingError("준비물 신청이 변경되었거나 이전 전송 확인이 필요합니다. 작성 내용은 유지되며, 담당 교사가 재전송 상태를 확인한 뒤 다시 제출해 주세요.");
 const demoMessage = "교사용 학생 계정의 연습 제출은 Google Sheet에 반영하지 않습니다.";
+const queuedMessage = "플랫폼에 임시 저장했습니다. 이전 준비물 전송 확인이 끝나면 담당 교사가 Google Sheet로 재전송할 수 있습니다.";
 
 export async function saveAndSyncMaterials(input: Input, retry = false) {
   const client = await (await getDb()).connect();
@@ -49,7 +50,25 @@ export async function saveAndSyncMaterials(input: Input, retry = false) {
   finally { client.release(); }
   if (prepared.saved.sync_status === "synced") return result(prepared.saved, "synced");
   if (prepared.demo) return result(prepared.saved, "pending", demoMessage);
+  if (!await claimMaterialDispatch(prepared.saved)) {
+    await (await getDb()).query(`UPDATE material_requests SET sync_error = $1
+      WHERE id = $2 AND sync_operation_id = $3 AND sync_status = 'pending'`,
+    [queuedMessage, prepared.saved.id, prepared.saved.sync_operation_id]);
+    await audit(input.actorId, "materials_saved", "material_request", prepared.saved.id, { syncStatus: "pending", queued: true });
+    return result(prepared.saved, "pending", queuedMessage);
+  }
   return sendSavedMaterials(prepared.saved, input.actorId);
+}
+
+async function claimMaterialDispatch(saved: RequestRow) {
+  const snapshot = saved.sync_snapshot ? parse<MaterialSheetSnapshot>(saved.sync_snapshot) : null;
+  if (!snapshot || !saved.sync_operation_id) return false;
+  const db = await getDb();
+  await db.query(`INSERT INTO material_sheet_dispatch (spreadsheet_id, operation_id, request_id)
+    VALUES ($1,$2,$3) ON CONFLICT (spreadsheet_id) DO NOTHING`, [snapshot.spreadsheetId, saved.sync_operation_id, saved.id]);
+  const owner = (await db.query<{ operation_id: string }>("SELECT operation_id FROM material_sheet_dispatch WHERE spreadsheet_id = $1",
+    [snapshot.spreadsheetId])).rows[0];
+  return owner?.operation_id === saved.sync_operation_id;
 }
 
 async function lockMaterialActor(client: PoolClient, actorId: string, teamId: string) {
@@ -91,9 +110,13 @@ async function prepareMaterialRequest(db: PoolClient, input: Input, retry: boole
   if (identical && saved.sync_status === "synced") return { saved, demo: false };
   const demo = team.actor_account_type === "demo" || submitter.account_type === "demo";
   if (saved && !saved.sync_snapshot && !demo) throw new UserFacingError("제출 당시 전송 위치·완료 기록을 확인할 수 없습니다. 중복 방지를 위해 담당 교사가 기존 시트와 신청을 먼저 대조해야 합니다.");
-  if (saved && !identical && saved.sync_status !== "synced" && !demo) throw conflict();
   let configVersionId = saved?.config_version_id ?? null;
   let snapshot = saved?.sync_snapshot ? parse(saved.sync_snapshot) : null;
+  if (saved && !identical && saved.sync_status !== "synced" && !demo) {
+    const reserved = snapshot && saved.sync_operation_id && (await db.query("SELECT operation_id FROM material_sheet_dispatch WHERE spreadsheet_id = $1 AND operation_id = $2",
+      [snapshot.spreadsheetId, saved.sync_operation_id])).rows.length > 0;
+    if (reserved || saved.sync_batch) throw conflict();
+  }
   if (!snapshot && !demo) {
     if (!team.leader_login_id || !team.leader_name) throw new UserFacingError("준비물 신청 전에 교사가 팀장을 지정해야 합니다.");
     snapshot = { spreadsheetId: SPREADSHEET_ID, sheetName: `${team.class_number}반`, layout: "team_sections",
@@ -119,7 +142,8 @@ async function prepareMaterialRequest(db: PoolClient, input: Input, retry: boole
   }
   if (!identical || !saved) {
     const operationId = createId("material_send");
-    if (snapshot) snapshot = { ...snapshot, items: input.items, submittedAt: new Date().toISOString(), previousOperationId: saved?.sync_operation_id ?? undefined };
+    if (snapshot) snapshot = { ...snapshot, items: input.items, submittedAt: new Date().toISOString(),
+      previousOperationId: saved?.sync_status === "synced" ? saved.sync_operation_id ?? undefined : undefined };
     const total = materialTotal(input.items);
     const client = db;
     const values = [JSON.stringify(input.items), total, "within_budget", snapshot ? JSON.stringify(snapshot) : null, operationId];
@@ -132,11 +156,6 @@ async function prepareMaterialRequest(db: PoolClient, input: Input, retry: boole
     [...values, createId("material"), input.submissionId, input.sessionId, cycleId, input.teamId, input.actorId, configVersionId]);
     if (!write.rows[0]) throw conflict();
     saved = write.rows[0];
-    if (!demo && snapshot) {
-      const claim = await client.query(`INSERT INTO material_sheet_dispatch (spreadsheet_id, operation_id, request_id) VALUES ($1,$2,$3)
-        ON CONFLICT (spreadsheet_id) DO NOTHING RETURNING operation_id`, [snapshot.spreadsheetId, operationId, saved.id]);
-      if (!claim.rows.length) throw conflict();
-    }
   }
   if (demo) {
     await db.query("UPDATE material_requests SET sync_error = $1 WHERE id = $2", [demoMessage, saved.id]);

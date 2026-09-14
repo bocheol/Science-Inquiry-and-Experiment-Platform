@@ -24,7 +24,7 @@ export function MaterialForm({ data, currentUserId, onRefresh }: { data: Inquiry
 
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem(storageKey);
+      const raw = localStorage.getItem(storageKey);
       const draft = raw ? JSON.parse(raw) : null;
       if (draft && typeof draft.submissionId === "string" && Array.isArray(draft.items) && draft.items.length <= 20
         && draft.items.every((item: MaterialItem) => item && [item.name, item.specification, item.link].every(value => typeof value === "string")
@@ -39,7 +39,7 @@ export function MaterialForm({ data, currentUserId, onRefresh }: { data: Inquiry
 
   useEffect(() => {
     if (!ready) return;
-    try { sessionStorage.setItem(storageKey, JSON.stringify({ submissionId: submissionId.current, items })); }
+    try { localStorage.setItem(storageKey, JSON.stringify({ submissionId: submissionId.current, items })); }
     catch { setError("기기 초안을 보관하지 못했습니다. 화면을 떠나기 전에 작성 내용을 복사해 주세요."); }
   }, [items, ready, storageKey]);
 
