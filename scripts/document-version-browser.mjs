@@ -33,7 +33,7 @@ try {
     await page.goto(target.base + "/inquiry#" + kind);
     const input = page.locator("#" + kind + "-purpose");
     await input.fill("비교 중에도 남아야 하는 미저장 초안");
-    await page.getByRole("button", { name: "두 버전 비교", exact: true }).last().click();
+    await page.getByRole("button", { name: "재제출 변경 보기", exact: true }).last().click();
     const modal = page.getByRole("dialog");
     await modal.getByLabel("기준 A").selectOption("revision:browser_" + kind + "_1");
     await modal.getByLabel("비교 B").selectOption("revision:browser_" + kind + "_2");
@@ -82,7 +82,7 @@ try {
     await page.keyboard.press("Escape");
     await modal.waitFor({ state: "detached" });
     assert.equal(await input.inputValue(), "비교 중에도 남아야 하는 미저장 초안");
-    await page.getByRole("button", { name: "두 버전 비교", exact: true }).last().click();
+    await page.getByRole("button", { name: "재제출 변경 보기", exact: true }).last().click();
     await page.getByRole("dialog").waitFor();
     await page.goBack();
     await page.getByRole("dialog").waitFor({ state: "detached" });
@@ -105,7 +105,7 @@ try {
   await page.locator("#feedback").fill("미저장 교사 의견");
   await page.locator("#report-feedback").fill("미저장 보고서 의견");
   for (const index of [0, 1]) {
-    await page.getByRole("button", { name: "두 버전 비교", exact: true }).nth(index).click();
+    await page.getByRole("button", { name: "재제출 변경 보기", exact: true }).nth(index).click();
     await page.getByRole("dialog").locator(".version-result").waitFor();
     assert.ok(await page.getByRole("dialog").evaluate(el => el.scrollWidth <= el.clientWidth));
     await page.getByRole("dialog").getByRole("button", { name: "닫기", exact: true }).click();

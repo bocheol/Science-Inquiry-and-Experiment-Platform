@@ -6,6 +6,7 @@ import { generateTemporaryPassword } from "@/lib/passwords";
 import { lockStudentTeams } from "@/lib/team-mutation-locks";
 import { ensureInitialCycle } from "@/lib/inquiry-cycles";
 import { UserFacingError } from "@/lib/user-facing-error";
+import { materialSheetUrl } from "@/lib/material-sheet-link";
 
 export async function assertTeacherId(actorId: string) {
   const db = await getDb();
@@ -148,7 +149,15 @@ export async function getClubManagement(actorId: string) {
   const members = await db.query<{ user_id: string; team_id: string }>(`SELECT tm.user_id, tm.team_id FROM team_members tm
     JOIN users u ON u.id = tm.user_id JOIN teams t ON t.id = tm.team_id JOIN clubs c ON c.id = t.club_id${assignmentJoin}
     WHERE c.academic_year = $1 AND u.academic_year = $1${access} AND tm.status = 'active'`, params);
-  return { clubs: clubs.rows, teams: teams.rows, students: students.rows, members: members.rows };
+  const clubsWithSheets = await Promise.all(clubs.rows.map(async club => {
+    const config = (await db.query<{ definition: { sheet?: { spreadsheetId?: string } } | string }>(
+      `SELECT definition FROM club_config_versions WHERE club_id = $1 AND config_type = 'materials'
+       AND config_key = 'default' AND status = 'published' ORDER BY version_number DESC LIMIT 1`, [club.id],
+    )).rows[0];
+    const definition = config && (typeof config.definition === "string" ? JSON.parse(config.definition) : config.definition);
+    return { ...club, materialSheetUrl: materialSheetUrl(definition?.sheet?.spreadsheetId) };
+  }));
+  return { clubs: clubsWithSheets, teams: teams.rows, students: students.rows, members: members.rows };
 }
 
 export async function getStudentActivities(userId: string) {

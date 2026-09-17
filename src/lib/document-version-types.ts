@@ -1,8 +1,15 @@
 import type { FormFieldDefinition } from "@/lib/club-settings";
 
 export type DocumentScope = { documentType: "plan" | "report"; documentId: string; cycleId: string };
-export type VersionRef = { kind: "current" | "revision" | "cycle_final"; id?: string };
+export type VersionRef = { kind: "current" | "revision" | "submission" | "cycle_final"; id?: string };
 export type VersionOption = { ref: VersionRef; label: string; eventAt: string | null; actorName?: string };
+export type DocumentReviewRound = {
+  id: string;
+  source: VersionOption;
+  resubmission: VersionOption | null;
+  feedback: string;
+  feedbackAt: string;
+};
 export type DocumentVersion = VersionOption & {
   sourceKey: string;
   fingerprint: string;
@@ -23,6 +30,7 @@ export type VersionList = {
   cycleTitle: string;
   fixed: VersionOption[];
   history: VersionOption[];
+  reviewRounds: DocumentReviewRound[];
   nextCursor: string | null;
 };
 export type VersionComparison = { scope: DocumentScope; a: DocumentVersion; b: DocumentVersion };

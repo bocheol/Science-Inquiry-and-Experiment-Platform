@@ -12,6 +12,7 @@ const server = new URL("../.next/standalone/server.js", import.meta.url);
 await access(server);
 const config = { host: "127.0.0.1", port: 55416, user: "codex_local", password: (await readFile(new URL("local-postgres-password.txt", root), "utf8")).trim(), ssl: false, connectionTimeoutMillis: 5000 };
 for (const key of ["DATABASE_URL", "DATABASE_SSL", "INSTANCE_UNIX_SOCKET", "DB_USER", "DB_PASSWORD", "DB_NAME", "OPENAI_API_KEY", "GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GOOGLE_SPREADSHEET_ID", "K_SERVICE", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "NODE_OPTIONS"]) process.env[key] = "";
+process.env.GOOGLE_SPREADSHEET_ID = "synthetic_browser_sheet";
 const database = `codex_validation_browser_${Date.now()}_${randomBytes(4).toString("hex")}`;
 const admin = new pg.Pool({ ...config, database: "postgres" });
 try {

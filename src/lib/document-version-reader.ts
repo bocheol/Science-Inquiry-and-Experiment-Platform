@@ -13,6 +13,11 @@ export class DocumentVersionError extends UserFacingError {
 type Queryable = Pick<PoolClient, "query">;
 type Access = { session_id: string; team_id: string; team_name: string; club_id: string | null; cycle_title: string; cycle_status: string; current_cycle_id: string | null; config_version_id: string | null; session_version: number };
 type Revision = { id: string; action: string; snapshot: unknown; created_at: Date | string; actor_name: string };
+type SubmissionRow = {
+  id: string; submission_number: number; source: string; review_status: string; teacher_feedback: string | null;
+  submitted_at: Date | string; reviewed_at: Date | string | null; actor_name: string;
+};
+type NoticeRow = { id: string; content: string; created_at: Date | string };
 const unavailable = () => new DocumentVersionError("이 기록을 찾을 수 없거나 열람할 수 없습니다.", 404);
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -78,6 +83,41 @@ async function readTransaction<T>(user: Pick<SessionUser, "id" | "role">, scope:
 function revisionOption(row: Revision): VersionOption {
   return { ref: { kind: "revision", id: row.id }, label: versionActionLabel(row.action), eventAt: iso(row.created_at), actorName: row.actor_name };
 }
+function submissionOption(submission: SubmissionRow): VersionOption {
+  return {
+    ref: { kind: "submission", id: submission.id },
+    label: `${submission.source === "legacy_capture" ? "기존 자료 고정본" : `제출본 ${submission.submission_number}`} · ${({ pending: "검토 대기", feedback: "수정 요청", approved: "승인", withdrawn: "철회" } as Record<string, string>)[submission.review_status] ?? submission.review_status}`,
+    eventAt: iso(submission.submitted_at), actorName: submission.actor_name,
+  };
+}
+export function pairPlanReviewRounds(submissions: SubmissionRow[]): VersionList["reviewRounds"] {
+  return submissions.filter(submission => submission.review_status === "feedback" && submission.teacher_feedback && submission.reviewed_at).map(submission => {
+    const next = submissions.find(candidate => Number(candidate.submission_number) > Number(submission.submission_number)
+      && candidate.source === "submission" && candidate.review_status !== "withdrawn");
+    return {
+      id: `plan:${submission.id}`,
+      source: { ...submissionOption(submission), label: `피드백을 받은 제출본 ${submission.submission_number}` },
+      resubmission: next ? { ...submissionOption(next), label: `수정 후 재제출본 ${next.submission_number}` } : null,
+      feedback: submission.teacher_feedback!, feedbackAt: iso(submission.reviewed_at)!,
+    };
+  }).reverse();
+}
+export function pairReportReviewRounds(reviewRows: Revision[], notices: NoticeRow[]): VersionList["reviewRounds"] {
+  return notices.flatMap(notice => {
+    const at = new Date(notice.created_at).getTime();
+    const sourceMatches = reviewRows.filter(row => row.action === "teacher_feedback" && new Date(row.created_at).getTime() === at);
+    if (sourceMatches.length !== 1) return [];
+    const source = sourceMatches[0]!;
+    const sourceIndex = reviewRows.indexOf(source);
+    const next = reviewRows.slice(sourceIndex + 1).find(row => row.action === "submit");
+    return [{
+      id: `report:${notice.id}`,
+      source: { ...revisionOption(source), label: "피드백을 받은 제출본" },
+      resubmission: next ? { ...revisionOption(next), label: "수정 후 재제출본" } : null,
+      feedback: notice.content, feedbackAt: iso(notice.created_at)!,
+    }];
+  }).reverse();
+}
 type Filters = { cursor?: string; fromDate?: string; toDate?: string };
 function dateBoundary(value: string | undefined, nextDay = false) {
   if (!value) return null;
@@ -118,8 +158,36 @@ export async function listDocumentVersions(user: Pick<SessionUser, "id" | "role"
       const endings = (await db.query<{ id: string }>("SELECT id FROM document_revisions WHERE document_type = $1 AND document_id = $2 AND cycle_id = $3 AND action = 'cycle_completed' LIMIT 1", [scope.documentType, scope.documentId, scope.cycleId])).rows;
       if (endings.length) fixed.push({ ref: { kind: "cycle_final" }, label: "이 회차 최종 보존본", eventAt: null });
     }
+    let reviewRounds: VersionList["reviewRounds"] = [];
+    if (scope.documentType === "plan") {
+      const submissions = (await db.query<SubmissionRow>(
+        `SELECT ps.id, ps.submission_number, ps.source, ps.review_status, ps.teacher_feedback,
+                ps.submitted_at, ps.reviewed_at, u.name AS actor_name
+           FROM plan_submissions ps JOIN users u ON u.id = ps.submitted_by
+          WHERE ps.plan_id = $1 AND ps.cycle_id = $2
+          ORDER BY ps.submission_number`, [scope.documentId, scope.cycleId],
+      )).rows;
+      fixed.push(...submissions.map(submissionOption).reverse());
+      reviewRounds = pairPlanReviewRounds(submissions);
+    } else {
+      const reviewRows = (await db.query<Revision>(
+        `SELECT dr.id, dr.action, dr.snapshot, dr.created_at, u.name AS actor_name
+           FROM document_revisions dr JOIN users u ON u.id = dr.changed_by
+          WHERE dr.document_type = 'report' AND dr.document_id = $1 AND dr.cycle_id = $2
+            AND dr.action IN ('teacher_feedback', 'submit')
+          ORDER BY dr.created_at, dr.id`, [scope.documentId, scope.cycleId],
+      )).rows;
+      const notices = (await db.query<NoticeRow>(
+        `SELECT id, content, created_at FROM notices
+          WHERE kind = 'action_request' AND source_type = 'report' AND source_id = $1
+          ORDER BY created_at, id`, [scope.documentId],
+      )).rows;
+      const submissions = reviewRows.filter(row => row.action === "submit");
+      fixed.push(...submissions.map((row, index) => ({ ...revisionOption(row), label: `제출 기록 ${index + 1}` })).reverse());
+      reviewRounds = pairReportReviewRounds(reviewRows, notices);
+    }
     const last = rows[29];
-    return { scope, teamName: context.team_name, cycleTitle: context.cycle_title, fixed, history,
+    return { scope, teamName: context.team_name, cycleTitle: context.cycle_title, fixed, history, reviewRounds,
       nextCursor: rows.length > 30 ? Buffer.from(JSON.stringify({ key, time: last.cursor_time, id: last.id })).toString("base64url") : null };
   });
 }
@@ -147,7 +215,27 @@ async function resolveVersion(db: PoolClient, scope: DocumentScope, context: Acc
   let definition: unknown;
   let isLive = false;
   let originalSource: unknown;
-  if (ref.kind === "revision" || (ref.kind === "cycle_final" && context.current_cycle_id !== scope.cycleId)) {
+  if (ref.kind === "submission") {
+    if (scope.documentType !== "plan" || !ref.id) throw unavailable();
+    const row = (await db.query<SubmissionRow & { form_data: unknown; config_definition: unknown }>(
+      `SELECT ps.id, ps.submission_number, ps.source, ps.review_status, ps.teacher_feedback,
+              ps.submitted_at, ps.reviewed_at, u.name AS actor_name,
+              pds.form_data, pds.config_definition
+         FROM plan_submissions ps JOIN plan_document_snapshots pds ON pds.id = ps.snapshot_id
+         JOIN users u ON u.id = ps.submitted_by
+        WHERE ps.id = $1 AND ps.plan_id = $2 AND ps.cycle_id = $3`,
+      [ref.id, scope.documentId, scope.cycleId],
+    )).rows[0];
+    if (!row) throw unavailable();
+    snapshot = { formData: row.form_data, reviewStatus: row.review_status, teacherFeedback: row.teacher_feedback, roles: [] };
+    originalSource = row.form_data;
+    definition = row.config_definition;
+    metadata = {
+      ref, label: row.source === "legacy_capture" ? "기존 자료 고정본" : `제출본 ${row.submission_number}`,
+      eventAt: iso(row.submitted_at), actorName: row.actor_name,
+    };
+    sourceKey = `submission:${row.id}`;
+  } else if (ref.kind === "revision" || (ref.kind === "cycle_final" && context.current_cycle_id !== scope.cycleId)) {
     if (ref.kind === "cycle_final" && context.cycle_status === "active") throw unavailable();
     const rows = (await db.query<Revision>(
       `SELECT dr.id, dr.action, dr.snapshot, dr.created_at, u.name AS actor_name FROM document_revisions dr

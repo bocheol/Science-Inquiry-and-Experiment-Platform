@@ -6,6 +6,9 @@ const { app, root, postgresVersion } = await createLocalTestDb("document_version
 globalThis.fetch = async () => { throw new Error("External network disabled"); };
 const { ensureInitialCycle } = await import("../src/lib/inquiry-cycles.ts");
 const { listDocumentVersions, compareDocumentVersions } = await import("../src/lib/document-version-reader.ts");
+const { createPlanSubmission } = await import("../src/lib/plan-snapshots.ts");
+const { recordReportRevision } = await import("../src/lib/document-history.ts");
+const { createActionNotice } = await import("../src/lib/notices.ts");
 const actor = { id: "diff_student", role: "student" }, teacher = { id: "teacher_bootstrap", role: "teacher" };
 let passed = 0;
 const check = async (name, run) => { await run(); passed++; console.log("PASS: " + name); };
@@ -25,6 +28,26 @@ try {
   for (let i = 0; i < 65; i++) await app.query("INSERT INTO document_revisions(id,document_type,document_id,cycle_id,snapshot,action,changed_by,created_at) VALUES($1,'plan','diff_plan',$2,$3,'field:topic','diff_student',$4)", [
     "diff_rev_" + String(i).padStart(3, "0"), cycle, { formData: { topic: "과거 주제 " + i }, reviewStatus: "draft", teacherFeedback: "" }, "2026-09-01T00:00:00.000123Z"
   ]);
+  await app.query("UPDATE investigation_plans SET form_data=$1 WHERE id='diff_plan'", [{ topic: "피드백 전 주제", method: "1회 측정" }]);
+  const planBefore = await createPlanSubmission(app, "diff_plan", actor.id);
+  await app.query("UPDATE plan_submissions SET review_status='feedback',teacher_feedback='반복 측정을 추가하세요.',reviewed_by=$2,reviewed_at=CURRENT_TIMESTAMP WHERE id=$1", [planBefore.id, teacher.id]);
+  await app.query("UPDATE investigation_plans SET form_data=$1 WHERE id='diff_plan'", [{ topic: "피드백 전 주제", method: "3회 반복 측정" }]);
+  await createPlanSubmission(app, "diff_plan", actor.id);
+  await app.query("UPDATE investigation_plans SET form_data=$1 WHERE id='diff_plan'", [{ topic: "현재 저장 주제" }]);
+  await app.query("UPDATE reports SET form_data=$1 WHERE id='diff_report'", [{ title: "저장 제목", purpose: "이전 통합 값", analysis: "피드백 전 분석" }]);
+  await recordReportRevision(app, "diff_report", actor.id, "submit");
+  const feedbackClient = await app.connect();
+  try {
+    await feedbackClient.query("BEGIN");
+    await recordReportRevision(feedbackClient, "diff_report", teacher.id, "teacher_feedback");
+    await createActionNotice(feedbackClient, { teacherId: teacher.id, teamId: "diff_team", sourceType: "report", sourceId: "diff_report", content: "오차 원인을 설명하세요." });
+    await feedbackClient.query("COMMIT");
+  } catch (error) {
+    await feedbackClient.query("ROLLBACK");
+    throw error;
+  } finally { feedbackClient.release(); }
+  await app.query("UPDATE reports SET form_data=$1 WHERE id='diff_report'", [{ title: "저장 제목", purpose: "이전 통합 값", analysis: "눈금 한계를 오차 원인으로 설명" }]);
+  await recordReportRevision(app, "diff_report", actor.id, "submit");
   const ref = id => ({ kind: "revision", id }), current = { kind: "current" };
   const snapshot = async () => {
     const result = {};
@@ -53,6 +76,22 @@ try {
     assert.equal(pair.a.values.purpose, "필드 우선 값"); assert.equal(pair.a.values.title, "저장 제목");
     assert.equal(pair.a.roles[0].userId, "diff_former");
     assert.equal(pair.a.roles[0].description, "이전 팀원의 역할");
+  });
+  await check("teacher feedback is paired only with the next explicit resubmission", async () => {
+    const planList = await listDocumentVersions(teacher, scope);
+    assert.equal(planList.reviewRounds.length, 1);
+    const planRound = planList.reviewRounds[0];
+    assert.equal(planRound.feedback, "반복 측정을 추가하세요.");
+    const planPair = await compareDocumentVersions(teacher, scope, planRound.source.ref, planRound.resubmission.ref);
+    assert.equal(planPair.a.values.method, "1회 측정");
+    assert.equal(planPair.b.values.method, "3회 반복 측정");
+    const reportList = await listDocumentVersions(teacher, report);
+    assert.equal(reportList.reviewRounds.length, 1);
+    const reportRound = reportList.reviewRounds[0];
+    assert.equal(reportRound.feedback, "오차 원인을 설명하세요.");
+    const reportPair = await compareDocumentVersions(teacher, report, reportRound.source.ref, reportRound.resubmission.ref);
+    assert.equal(reportPair.a.values.analysis, "피드백 전 분석");
+    assert.equal(reportPair.b.values.analysis, "눈금 한계를 오차 원인으로 설명");
   });
   await check("document/cycle substitution and removed student are denied", async () => {
     await assert.rejects(compareDocumentVersions(actor, report, ref("diff_rev_001"), current), e => e.status === 404);

@@ -25,6 +25,14 @@ describe("private version API", () => {
     expect(response.status).toBe(200);
     expect(compareDocumentVersions).toHaveBeenCalledWith(user, { documentType: "plan", documentId: "plan", cycleId: "cycle" }, { kind: "revision", id: "yesterday" }, { kind: "revision", id: "lastweek" }, { a: undefined, b: undefined });
   });
+  it("accepts immutable plan submissions and requires their ids", async () => {
+    vi.mocked(compareDocumentVersions).mockResolvedValue({ synthetic: true } as never);
+    const missing = await documentVersionGet(new Request(`http://local/?${query}&aKind=submission&bKind=current`), "compare");
+    expect(missing.status).toBe(400);
+    const response = await documentVersionGet(new Request(`http://local/?${query}&aKind=submission&aId=before&bKind=submission&bId=after`), "compare");
+    expect(response.status).toBe(200);
+    expect(compareDocumentVersions).toHaveBeenCalledWith(user, { documentType: "plan", documentId: "plan", cycleId: "cycle" }, { kind: "submission", id: "before" }, { kind: "submission", id: "after" }, { a: undefined, b: undefined });
+  });
   it("discards a result if the session changed during the read", async () => {
     vi.mocked(getCurrentUser).mockResolvedValueOnce(user).mockResolvedValueOnce(null);
     vi.mocked(listDocumentVersions).mockResolvedValue({ synthetic: true } as never);

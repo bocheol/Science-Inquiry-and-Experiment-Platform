@@ -6,6 +6,8 @@ import { TeacherHelpChatbot } from "@/components/teacher-help-chatbot";
 import { TeacherRequestBoard } from "@/components/teacher-request-board";
 import { getClubManagement } from "@/lib/clubs";
 import { PastRecordsPanel } from "@/components/past-records-panel";
+import { SPREADSHEET_ID } from "@/lib/google-sheets";
+import { materialSheetUrl } from "@/lib/material-sheet-link";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +24,7 @@ export default async function TeacherPage() {
           <div className="toolbar-group">{user.isMaster ? <a className="button secondary" href="/teacher/master">마스터 계정 관리</a> : null}<a className="button secondary" href="/teacher/club-settings">동아리 운영 설정</a><a className="button secondary" href="/teacher/notices">공지 관리</a><a className="button secondary" href="/teacher/evaluations">자기·동료평가 관리</a><a className="button" href="/teacher/exams">시험 문제 관리</a><span className="badge">2026학년도</span></div>
         </div>
         <PastRecordsPanel audience="teacher" />
-        <TeacherActivities classes={data} clubs={clubs} />
+        <TeacherActivities classes={data} clubs={clubs} classSheetUrl={materialSheetUrl(SPREADSHEET_ID)} />
         <TeacherRequestBoard />
         <TeacherHelpChatbot />
       </main>

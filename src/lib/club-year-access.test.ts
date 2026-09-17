@@ -3,6 +3,22 @@ import { getDb } from "@/lib/db";
 import { ACADEMIC_YEAR } from "@/lib/constants";
 import { assignClubStudent, leaveClub, getClubManagement, enrollClubStudent } from "@/lib/clubs";
 
+it("shows only the latest published material sheet within the teacher's assigned clubs", async () => {
+  const db = await getDb(), actor = "sheet_link_teacher", club = "sheet_link_club";
+  await db.query("INSERT INTO users(id,name,login_id,academic_year,role,password_hash,must_change_password) VALUES($1,'합성 담당',$1,$2,'teacher','unused',FALSE)", [actor, ACADEMIC_YEAR]);
+  for (const id of [club, `${club}_other`]) {
+    await db.query("INSERT INTO clubs(id,academic_year,name,created_by) VALUES($1,$2,'합성 시트 동아리',$3)", [id, ACADEMIC_YEAR, actor]);
+    for (const [version, status, sheetId] of [[1, "published", "old-sheet"], [2, "published", "current-sheet"], [3, "draft", "draft-sheet"], [4, "archived", "archived-sheet"]] as const) {
+      await db.query("INSERT INTO club_config_versions(id,club_id,config_type,version_number,title,status,definition,created_by) VALUES($1,$2,'materials',$3,'합성 연결',$4,$5,$6)", [`${id}_${version}`, id, version, status, JSON.stringify({ sheet: { spreadsheetId: sheetId } }), actor]);
+    }
+  }
+  await db.query("INSERT INTO club_teacher_assignments(club_id,teacher_id,assigned_by) VALUES($1,$2,$2)", [club, actor]);
+  const before = (await db.query("SELECT * FROM club_config_versions WHERE club_id=$1 ORDER BY version_number", [club])).rows;
+  const data = await getClubManagement(actor);
+  expect(data.clubs).toEqual([{ id: club, name: "합성 시트 동아리", materialSheetUrl: "https://docs.google.com/spreadsheets/d/current-sheet/edit" }]);
+  expect((await db.query("SELECT * FROM club_config_versions WHERE club_id=$1 ORDER BY version_number", [club])).rows).toEqual(before);
+});
+
 it.each(["assign", "leave"].flatMap(action => [false, true].flatMap(oldActor => [false, true].flatMap(oldClub => [false, true].map(oldStudent => ({ action, oldActor, oldClub, oldStudent }))))))(
   "$action oldActor=$oldActor oldClub=$oldClub oldStudent=$oldStudent", async ({ action, oldActor, oldClub, oldStudent }) => {
     const db = await getDb(), key = `club_year_${action}_${oldActor}_${oldClub}_${oldStudent}`, actor = `${key}_actor`, student = `${key}_student`;

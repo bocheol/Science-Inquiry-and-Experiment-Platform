@@ -8,10 +8,11 @@ const id = z.string().min(1).max(200);
 const scopeSchema = z.object({ documentType: z.enum(["plan", "report"]), documentId: id, cycleId: id });
 const listSchema = scopeSchema.extend({ cursor: z.string().max(2000).optional(), fromDate: z.string().max(10).optional(), toDate: z.string().max(10).optional() });
 const compareSchema = scopeSchema.extend({
-  aKind: z.enum(["current", "revision", "cycle_final"]), aId: id.optional(),
-  bKind: z.enum(["current", "revision", "cycle_final"]), bId: id.optional(),
+  aKind: z.enum(["current", "revision", "submission", "cycle_final"]), aId: id.optional(),
+  bKind: z.enum(["current", "revision", "submission", "cycle_final"]), bId: id.optional(),
   aFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(), bFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-}).refine(value => (value.aKind !== "revision" || Boolean(value.aId)) && (value.bKind !== "revision" || Boolean(value.bId)));
+}).refine(value => (["revision", "submission"].includes(value.aKind) ? Boolean(value.aId) : true)
+  && (["revision", "submission"].includes(value.bKind) ? Boolean(value.bId) : true));
 const headers = { "Cache-Control": "private, no-store" };
 
 export async function documentVersionGet(request: Request, mode: "list" | "compare") {
@@ -30,8 +31,8 @@ export async function documentVersionGet(request: Request, mode: "list" | "compa
       const parsed = compareSchema.safeParse(query);
       if (!parsed.success) throw new DocumentVersionError("비교할 두 버전을 선택해 주세요.", 400);
       const input = parsed.data;
-      const a: VersionRef = { kind: input.aKind, id: input.aKind === "revision" ? input.aId : undefined };
-      const b: VersionRef = { kind: input.bKind, id: input.bKind === "revision" ? input.bId : undefined };
+      const a: VersionRef = { kind: input.aKind, id: ["revision", "submission"].includes(input.aKind) ? input.aId : undefined };
+      const b: VersionRef = { kind: input.bKind, id: ["revision", "submission"].includes(input.bKind) ? input.bId : undefined };
       result = await compareDocumentVersions(user, scope.data, a, b, { a: input.aFingerprint, b: input.bFingerprint });
     }
     const current = await getCurrentUser();

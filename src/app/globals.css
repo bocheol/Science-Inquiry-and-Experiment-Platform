@@ -995,6 +995,11 @@ a {
 .version-dialog-header p { font-size:.85rem; margin:5px 0 0; }
 .version-dialog-body { overflow:auto; overscroll-behavior:contain; padding:16px; padding-bottom:max(24px,env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:16px; }
 .version-dialog .button,.version-dialog select,.version-dialog input,.version-dialog summary { min-height:44px; }
+.document-review-rounds { display:grid; gap:10px; }
+.document-review-rounds .discussion-note { margin:0; }
+.document-review-rounds .discussion-note.selected { border-color:#327a62; box-shadow:0 0 0 2px rgb(50 122 98 / 15%); }
+.document-review-rounds .discussion-note p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.document-review-rounds .toolbar > div { min-width:0; }
 .version-date-filter,.version-selectors { display:flex; flex-direction:column; gap:12px; }
 .version-search summary { cursor:pointer; font-weight:600; display:flex; align-items:center; }
 .version-search summary::before { content:"▸"; margin-right:8px; }
