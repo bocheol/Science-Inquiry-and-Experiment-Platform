@@ -32,3 +32,6 @@ AI_QUALITY_CASES.json
 .github/
 .science-dev/
 work/
+
+# Separate Sites source mirror is not a Cloud Run application input.
+experiments/sites-student-ui/

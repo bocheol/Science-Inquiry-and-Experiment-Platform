@@ -1,0 +1,15 @@
+{
+  "source_project_id": "appgprj_6ac3b58f1f9c819192282257e89335d7",
+  "source_commit": "d72155b79ce0d77333b48bae01caf67407963f53",
+  "excluded": [
+    "tsconfig.tsbuildinfo"
+  ],
+  "reason": "Generated TypeScript cache is not source code; runtime state, credentials, database and builds are excluded.",
+  "asset_encoding": {
+    "fonts": "Pinned Pretendard 1.3.9 dependency URLs with SHA-256 integrity. Published Sites font binaries remain in the native source Git; this mirror uses official package bytes."
+  },
+  "additional_files": [
+    "scripts/restore-fonts.mjs",
+    "asset-source/"
+  ]
+}
