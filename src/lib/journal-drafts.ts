@@ -1,10 +1,6 @@
-import "client-only";
+import { persistEncryptedJournalDraft, removeEncryptedJournalDraft } from "@/lib/journal-recovery-client";
 
 import type { JournalImage } from "@/lib/types";
-
-const DATABASE_NAME = "science-inquiry-journal-drafts";
-const STORE_NAME = "drafts";
-const DATABASE_VERSION = 1;
 
 export type StoredJournalPhoto = {
   clientId: string;
@@ -29,57 +25,13 @@ export type StoredJournalDraft = {
   savedAt: string;
 };
 
-function openDatabase() {
-  return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: "key" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("임시 저장소를 열지 못했습니다."));
-  });
-}
-
-async function runStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>) {
-  const database = await openDatabase();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, mode);
-      const request = action(transaction.objectStore(STORE_NAME));
-      // A request can succeed before its transaction fails (for example, quota).
-      transaction.oncomplete = () => resolve(request.result);
-      transaction.onabort = () => reject(transaction.error ?? new Error("임시 저장소 작업이 취소되었습니다."));
-      transaction.onerror = () => reject(transaction.error ?? new Error("임시 저장소 작업에 실패했습니다."));
-      request.onerror = () => reject(request.error ?? new Error("임시 저장소 작업에 실패했습니다."));
-    });
-  } finally {
-    database.close();
-  }
-}
-
-export async function getJournalDraft(key: string) {
-  return (await runStore<StoredJournalDraft | undefined>("readonly", (store) => store.get(key))) ?? null;
-}
-
-export async function putJournalDraft(draft: StoredJournalDraft) {
-  await runStore<IDBValidKey>("readwrite", (store) => store.put(draft));
-}
-
-export async function deleteJournalDraft(key: string) {
-  await runStore<undefined>("readwrite", (store) => store.delete(key));
-}
+export const putJournalDraft = persistEncryptedJournalDraft;
+export const deleteJournalDraft = removeEncryptedJournalDraft;
 
 export async function prepareJournalPhoto(file: File): Promise<StoredJournalPhoto> {
   const supported = ["image/jpeg", "image/png", "image/webp"] as const;
   if (!supported.includes(file.type as (typeof supported)[number])) throw new Error("JPG, PNG, WebP 사진만 첨부할 수 있습니다.");
-  if (file.size <= 5 * 1024 * 1024) {
-    return {
-      clientId: crypto.randomUUID(),
-      fileName: file.name.slice(0, 220) || "experiment-photo",
-      contentType: file.type as StoredJournalPhoto["contentType"],
-      blob: file,
-    };
-  }
+  if (!file.size || file.size > 25 * 1024 * 1024) throw new Error("사진은 25MB 이하로 선택해 주세요.");
   const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   try {
     const longest = Math.max(bitmap.width, bitmap.height);

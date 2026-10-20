@@ -1,5 +1,6 @@
 "use client";
 
+import { announcePrivateSessionChange, hidePrivateScreen, markPrivateLogoutReady, preservePrivateDrafts, showPrivateScreen } from "@/lib/private-session";
 import { useCallback, useEffect, useState } from "react";
 import { PushSubscriptionSync } from "@/components/push-notification-manager";
 import type { NoticeFeed } from "@/lib/notices";
@@ -7,6 +8,8 @@ import type { NoticeFeed } from "@/lib/notices";
 export function AppHeader({ name, role }: { name: string; role: "student" | "teacher" }) {
   const [feed, setFeed] = useState<NoticeFeed | null>(null);
   const [popupDismissed, setPopupDismissed] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const refreshNotices = useCallback(async () => {
     if (role !== "student") return;
@@ -48,6 +51,12 @@ export function AppHeader({ name, role }: { name: string; role: "student" | "tea
     if (await acknowledgePopup()) window.location.assign(path);
   }
 
+  async function logout(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (loggingOut) return;
+    const form = event.currentTarget; setLoggingOut(true); hidePrivateScreen();
+    try { await preservePrivateDrafts(); markPrivateLogoutReady(); announcePrivateSessionChange(); form.submit(); }
+    catch (error) { setLogoutError(error instanceof Error ? error.message : "복구 저장에 실패했습니다."); showPrivateScreen(); setLoggingOut(false); }
+  }
   return (
     <>
       {role === "student" ? <PushSubscriptionSync /> : null}
@@ -57,13 +66,15 @@ export function AppHeader({ name, role }: { name: string; role: "student" | "tea
           <span>과탐실</span>
         </a>
         <div className="user-chip">
+          <a className="header-notice-link" href="/records">세특 커스텀</a>
           {role === "student" ? <a className="header-notice-link" href="/notices">공지·알림{feed?.unreadCount ? <span className="notice-count" aria-label={`읽지 않은 공지 ${feed.unreadCount}개`}>{feed.unreadCount > 99 ? "99+" : feed.unreadCount}</span> : null}</a> : <a className="header-notice-link" href="/teacher/notices">공지 관리</a>}
           <span>{name} · {role === "teacher" ? "교사" : "학생"}</span>
-          <form action="/api/auth/logout" method="post">
-            <button className="button secondary" type="submit">로그아웃</button>
+          <form action="/api/auth/logout" method="post" onSubmit={logout}>
+            <button className="button secondary" type="submit" disabled={loggingOut}>{loggingOut ? "복구 저장 중…" : "로그아웃"}</button>
           </form>
         </div>
       </header>
+      {logoutError ? <div role="alert" className="error-box">{logoutError}</div> : null}
       {role === "student" && feed?.popupNotice && !popupDismissed ? (
         <div className="notice-popup-backdrop no-print" role="presentation">
           <section className="notice-popup" role="dialog" aria-modal="true" aria-labelledby="important-notice-title">

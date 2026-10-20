@@ -1,3 +1,4 @@
+import { grantTestJournalClasses } from "@/test/journal-permissions";
 import { expect, it } from "vitest";
 import { getDb } from "@/lib/db";
 import { ACADEMIC_YEAR } from "@/lib/constants";
@@ -17,13 +18,14 @@ it.each(cases)("teacher access club=$club action=$action phase=$phase", async ({
     await db.query("INSERT INTO club_config_versions(id,club_id,config_type,version_number,title,status,created_by) VALUES($1,$1,'exam',1,'합성 설정','published',$2)", [key, teacher]);
   }
   const classId = (await db.query("SELECT id FROM classes WHERE academic_year=$1 AND class_number=4", [ACADEMIC_YEAR])).rows[0].id;
+  if (!club) await grantTestJournalClasses(db, teacher, classId);
   await db.query("INSERT INTO teams(id,class_id,club_id,team_number,name) VALUES($1,$2,$3,$4,'합성 시험팀')", [key, club ? null : classId, club ? key : null, 100 + index]);
   await db.query("INSERT INTO inquiry_sessions(id,team_id) VALUES($1,$1)", [key]);
   await db.query("INSERT INTO team_members(id,team_id,user_id) VALUES($1,$1,$2)", [key, student]);
   const change = () => action === "deactivate" ? changeManagedAccountStatus(master, teacher, "deactivate") : action === "password" ? updatePassword(teacher, "synthetic-reset-only", true) : setClubTeacherAssignment(master, key, teacher, false);
   let calls = 0, changed = false;
   const generator: ExamGenerator = {
-    generateCommon: async () => { calls++; return [{ stimulus: "합성 자료", question: "합성 문제", competency: "해석", difficulty: "standard", modelAnswer: "합성 답", rubric: [{ criterion: "근거", points: 1 }], sourceKeys: [] }]; },
+    generateCommon: async () => { calls++; if (phase === "generating" && !changed) { changed = true; await change(); } return [{ stimulus: "합성 자료", question: "합성 문제", competency: "해석", difficulty: "standard", modelAnswer: "합성 답", rubric: [{ criterion: "근거", points: 1 }], sourceKeys: [] }]; },
     generateTeam: async () => { if (phase === "generating" && !changed) { changed = true; await change(); } return { teamQuestions: [], individualQuestions: [] }; },
   };
   const input = { ...(club ? { clubId: key } : { classNumber: 4 }), title: key, commonCount: 1, teamCount: 0, individualCount: 0, totalScore: 1, commonScope: "합성 범위" };

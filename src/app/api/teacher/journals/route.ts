@@ -1,3 +1,4 @@
+import { PrivateJournalAccessError } from "@/lib/journal-access";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
   try {
     return NextResponse.json(await listTeacherTeamJournals(user, parsed.data, cycle.data));
   } catch (error) {
-    const status = error instanceof JournalAccessError ? error.status : 400;
+    const status = (error instanceof JournalAccessError || error instanceof PrivateJournalAccessError) ? error.status : 400;
     return NextResponse.json({ message: userFacingMessage(error, "실험 일지를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.") }, { status });
   }
 }

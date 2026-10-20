@@ -1,3 +1,4 @@
+import { assertTeacherJournalClassAccess, journalTeacherClasses } from "@/lib/journal-access";
 import type { PoolClient } from "pg";
 import { ACADEMIC_YEAR, PLAN_FIELDS, REPORT_FIELDS } from "@/lib/constants";
 import { audit, getDb } from "@/lib/db";
@@ -61,6 +62,7 @@ export type ExamSetData = {
   commonScope: string;
   generatedAt: string;
   confirmedAt: string | null;
+  studentPrivacyReviewed?: boolean;
   revisionNumber: number;
   parentExamSetId: string | null;
   correctionReason: string | null;
@@ -72,6 +74,7 @@ export type ExamManagementData = {
   classNumber: number | null;
   clubId: string | null;
   activityLabel: string;
+  availableClasses?: number[];
   availableClubs: Array<{ id: string; name: string }>;
   defaultConfig: null | { title: string; commonCount: number; teamCount: number; individualCount: number; totalScore: number; commonScope: string; configVersionId: string };
   sets: Array<{
@@ -188,6 +191,7 @@ async function prepareTargetSources(teacherId: string, target: { classNumber?: n
     const classResult = await db.query<{ id: string }>("SELECT id FROM classes WHERE academic_year = $1 AND class_number = $2", [ACADEMIC_YEAR, target.classNumber]);
     classId = classResult.rows[0]?.id ?? null;
     if (!classId) throw new ExamServiceError("학급을 찾을 수 없습니다.", 404);
+    await assertTeacherJournalClassAccess(db, teacherId, classId);
   }
   const targetColumn = clubId ? "club_id" : "class_id";
   const targetId = clubId ?? classId;
@@ -410,6 +414,7 @@ async function lockPreparedExamRoster(client: PoolClient, prepared: { classId: s
   }
   await lockStudentsTeams(client, [teacherId, ...teams.flatMap(team => team.students.map(student => student.id))], scopeTeams.rows.map(team => team.id));
   await assertExamGenerationAccess(client, teacherId, prepared.clubId, true);
+  if (prepared.classId) await assertTeacherJournalClassAccess(client, teacherId, prepared.classId);
   const populated = await client.query<{ id: string }>(
     `SELECT DISTINCT t.id FROM teams t JOIN team_members tm ON tm.team_id = t.id JOIN users u ON u.id = tm.user_id
       WHERE t.${scopeColumn} = $1 AND t.status = 'active' AND tm.status = 'active'
@@ -454,7 +459,7 @@ export async function generateExamSet(
   const scope = input.commonScope.trim() || "통합과학 탐구 설계, 자료 해석, 변인 통제, 오차 분석";
   try {
     const requestKey = aiRequestKey("exam_generation", {
-      evidencePolicyVersion: 3,
+      evidencePolicyVersion: 4,
       clientRequestId: clientRequestId ?? null,
       teacherId,
       input: { ...input, title: input.title.trim(), commonScope: scope },
@@ -497,14 +502,36 @@ export async function generateExamSet(
         }
         return result;
       };
-      const teamResults = await mapWithConcurrency(prepared.teams, 2, async (team) =>
-        runAiJobStep(job, `team:${team.id}`, async () => validateTeamResult(await generator.generateTeam({
-          team: team.source,
-          teamCount: input.teamCount,
-          individualCount: input.individualCount,
-          requestId: aiRequestKey("exam_team_step", { jobId: job.jobId, teamId: team.id }),
-        }), team)),
-      );
+      const teamResults = await mapWithConcurrency(prepared.teams, 2, async (team) => {
+        // The provider never sees personal material in a shared-question request.
+        const shared = await runAiJobStep(job, `team-public:${team.id}`, async () => {
+          if (!input.teamCount) return [];
+          const result = await generator.generateTeam({
+            team: { ...team.source, students: [] }, teamCount: input.teamCount, individualCount: 0,
+            requestId: aiRequestKey("exam_team_public_step", { jobId: job.jobId, teamId: team.id }),
+          });
+          if (result.teamQuestions.length !== input.teamCount || result.individualQuestions.length) throw new ExamServiceError("팀 공통 문항 형식을 확인해 주세요.");
+          for (const question of result.teamQuestions) evidenceFor(question, team.source.sources, "team");
+          return result.teamQuestions;
+        });
+        const individualQuestions = await mapWithConcurrency(team.students, 2, async (student) => {
+          const questions = await runAiJobStep(job, `individual:${team.id}:${student.ref}`, async () => {
+            if (!input.individualCount) return [];
+            const result = await generator.generateTeam({
+              team: { ...team.source, sources: [], students: [student.source] },
+              teamCount: 0, individualCount: input.individualCount,
+              requestId: aiRequestKey("exam_individual_step", { jobId: job.jobId, teamId: team.id, studentRef: student.ref }),
+            });
+            if (result.teamQuestions.length || result.individualQuestions.length !== 1 || result.individualQuestions[0]?.studentRef !== student.ref) throw new ExamServiceError("개인 문항에 다른 학생 자료가 포함되었습니다.");
+            const own = result.individualQuestions[0].questions;
+            if (own.length !== input.individualCount) throw new ExamServiceError("개인 문항 수가 요청과 다릅니다.");
+            for (const question of own) evidenceFor(question, student.source.sources, "individual");
+            return own;
+          });
+          return { studentRef: student.ref, questions };
+        });
+        return validateTeamResult({ teamQuestions: shared, individualQuestions }, team);
+      });
       const scores = questionScores(
         { common: input.commonCount, team: input.teamCount, individual: input.individualCount },
         input.totalScore,
@@ -604,6 +631,11 @@ export function questionsForPaper(data: Pick<ExamSetData, "questions">, paper: P
 
 export async function getExamManagementData(classNumber = 9, selectedSetId?: string, teacherId?: string, clubId?: string): Promise<ExamManagementData> {
   const db = await getDb();
+  if (teacherId && !clubId) {
+    const target = (await db.query<{ id: string }>("SELECT id FROM classes WHERE academic_year = $1 AND class_number = $2", [ACADEMIC_YEAR, classNumber])).rows[0];
+    if (!target) throw new ExamServiceError("학급을 찾을 수 없습니다.", 404);
+    await assertTeacherJournalClassAccess(db, teacherId, target.id);
+  }
   let targetClub: { id: string; name: string } | null = null;
   if (clubId) {
     let result;
@@ -652,18 +684,19 @@ export async function getExamManagementData(classNumber = 9, selectedSetId?: str
     id: row.id, title: row.title, classNumber: row.class_number, status: row.status, generatedAt: iso(row.generated_at)!,
     revisionNumber: row.revision_number, parentExamSetId: row.parent_exam_set_id,
   }));
-  const base = { classNumber: targetClub ? null : classNumber, clubId: targetClub?.id ?? null, activityLabel: targetClub?.name ?? `${classNumber}반`, availableClubs, defaultConfig };
+  const availableClasses = teacherId ? (await journalTeacherClasses(db, teacherId)).map(c => c.class_number) : undefined;
+  const base = { availableClasses, classNumber: targetClub ? null : classNumber, clubId: targetClub?.id ?? null, activityLabel: targetClub?.name ?? `${classNumber}반`, availableClubs, defaultConfig };
   if (!setId) return { ...base, sets, selected: null };
 
   const setResult = await db.query<{
     id: string; title: string; class_number: number | null; club_id: string | null; activity_label: string; status: "draft" | "confirmed";
     common_count: number; team_count: number; individual_count: number; total_score: number;
     common_scope: string; generated_at: Date | string; confirmed_at: Date | string | null;
-    revision_number: number; parent_exam_set_id: string | null; correction_reason: string | null;
+    revision_number: number; parent_exam_set_id: string | null; correction_reason: string | null; student_privacy_reviewed: boolean;
   }>(
     `SELECT es.id, es.title, c.class_number, es.club_id, COALESCE(c.name, cl.name) AS activity_label, es.status, es.common_count, es.team_count,
             es.individual_count, es.total_score, es.common_scope, es.generated_at, es.confirmed_at,
-            es.revision_number, es.parent_exam_set_id, es.correction_reason
+            es.revision_number, es.parent_exam_set_id, es.correction_reason, es.student_privacy_reviewed
        FROM exam_sets es LEFT JOIN classes c ON c.id = es.class_id LEFT JOIN clubs cl ON cl.id = es.club_id WHERE es.id = $1`,
     [setId],
   );
@@ -699,7 +732,7 @@ export async function getExamManagementData(classNumber = 9, selectedSetId?: str
       id: set.id, title: set.title, classNumber: set.class_number, clubId: set.club_id, activityLabel: set.activity_label, status: set.status,
       commonCount: set.common_count, teamCount: set.team_count, individualCount: set.individual_count,
       totalScore: set.total_score, commonScope: set.common_scope, generatedAt: iso(set.generated_at)!,
-      confirmedAt: iso(set.confirmed_at), questions: questionResult.rows.map(toQuestion),
+      confirmedAt: iso(set.confirmed_at), studentPrivacyReviewed: set.student_privacy_reviewed, questions: questionResult.rows.map(toQuestion),
       revisionNumber: set.revision_number, parentExamSetId: set.parent_exam_set_id, correctionReason: set.correction_reason,
       papers: paperResult.rows.map((paper) => ({
         examId: paper.exam_id, studentId: paper.student_id, studentName: paper.student_name, loginId: paper.login_id,
@@ -715,13 +748,14 @@ export async function getExamManagementData(classNumber = 9, selectedSetId?: str
 
 async function assertExamSetTeacherAccess(teacherId: string, examSetId: string) {
   const db = await getDb();
-  const result = await db.query<{ club_id: string | null }>(
-    `SELECT es.club_id FROM exam_sets es LEFT JOIN classes c ON c.id = es.class_id
+  const result = await db.query<{ club_id: string | null; class_id: string | null }>(
+    `SELECT es.club_id, es.class_id FROM exam_sets es LEFT JOIN classes c ON c.id = es.class_id
       LEFT JOIN clubs cl ON cl.id = es.club_id
       WHERE es.id = $1 AND COALESCE(c.academic_year, cl.academic_year) = $2`,
     [examSetId, ACADEMIC_YEAR],
   );
   if (!result.rows[0]) throw new ExamServiceError("시험을 찾을 수 없습니다.", 404);
+  if (result.rows[0].class_id) await assertTeacherJournalClassAccess(db, teacherId, result.rows[0].class_id);
   if (result.rows[0].club_id) await getExamManagementData(9, examSetId, teacherId, result.rows[0].club_id);
 }
 
@@ -827,7 +861,7 @@ export async function confirmExamSet(teacherId: string, examSetId: string) {
     throw new ExamServiceError("문제·모범답안·채점 기준이 비어 있는 문항이 있습니다.");
   }
   const db = await getDb();
-  await db.query("UPDATE exam_sets SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [examSetId]);
+  await db.query("UPDATE exam_sets SET status = 'confirmed', student_privacy_reviewed = TRUE, confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [examSetId]);
   await db.query("UPDATE exams SET status = 'reviewed', reviewed_by = $1 WHERE exam_set_id = $2", [teacherId, examSetId]);
   await db.query(
     `UPDATE inquiry_sessions SET stage = 'EXAMINING', last_activity_at = CURRENT_TIMESTAMP
@@ -835,6 +869,25 @@ export async function confirmExamSet(teacherId: string, examSetId: string) {
     [examSetId],
   );
   await audit(teacherId, "exam_set_confirmed", "exam_set", examSetId);
+}
+
+/** Explicit teacher review of immutable historical questions; grades/publication state stay intact. */
+export async function reviewConfirmedExamPrivacy(teacherId: string, examSetId: string) {
+  const db = await getDb(); const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const target = (await client.query<{ class_id: string | null; club_id: string | null }>("SELECT class_id, club_id FROM exam_sets WHERE id=$1", [examSetId])).rows[0];
+    if (!target) throw new ExamServiceError("시험을 찾을 수 없습니다.", 404);
+    const table = target.club_id ? "clubs" : "classes";
+    await client.query(`SELECT id FROM ${table} WHERE id=$1 FOR UPDATE`, [target.club_id ?? target.class_id]);
+    await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [teacherId]);
+    await assertExamGenerationAccess(client, teacherId, target.club_id, true);
+    if (target.class_id) await assertTeacherJournalClassAccess(client, teacherId, target.class_id);
+    const changed = await client.query("UPDATE exam_sets SET student_privacy_reviewed=TRUE, updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND status='confirmed' RETURNING id", [examSetId]);
+    if (!changed.rows.length) throw new ExamServiceError("확정된 시험만 개인정보 검토를 기록할 수 있습니다.");
+    await client.query("INSERT INTO audit_logs (id,actor_id,action,entity_type,entity_id,detail) VALUES ($1,$2,'exam_student_privacy_reviewed','exam_set',$3,'{}')", [createId("audit"), teacherId, examSetId]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }
 
 export async function createCorrectionExamSet(teacherId: string, examSetId: string, reason: string) {
@@ -970,6 +1023,7 @@ export async function getPublishedStudentExamResult(studentId: string, teamId?: 
        LEFT JOIN classes tc ON tc.id = t.class_id LEFT JOIN clubs tl ON tl.id = t.club_id
        LEFT JOIN classes ec ON ec.id = es.class_id LEFT JOIN clubs el ON el.id = es.club_id
       WHERE e.student_id = $1 AND ($2::text IS NULL OR t.id = $2) AND e.status = 'published' AND er.published_at IS NOT NULL AND t.status = 'active'
+        AND es.student_privacy_reviewed = TRUE
         AND u.academic_year = $3 AND COALESCE(tc.academic_year, tl.academic_year) = $3
         AND COALESCE(ec.academic_year, el.academic_year) = $3
       ORDER BY er.published_at DESC LIMIT 1`,

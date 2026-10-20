@@ -1,3 +1,4 @@
+import { grantTestJournalClasses } from "@/test/journal-permissions";
 import { expect, it } from "vitest";
 import { getDb } from "@/lib/db";
 import { ACADEMIC_YEAR } from "@/lib/constants";
@@ -10,6 +11,7 @@ async function fixture(key: string, year: number, club: boolean, classNumber: nu
     await db.query("INSERT INTO clubs(id,academic_year,name,created_by) VALUES($1,$2,'합성 시험 동아리','teacher_bootstrap')", [key, year]);
     await db.query("INSERT INTO club_teacher_assignments(club_id,teacher_id,assigned_by) VALUES($1,'teacher_bootstrap','teacher_bootstrap')", [key]);
   } else await db.query("INSERT INTO classes(id,academic_year,class_number,name) VALUES($1,$2,$3,'합성 시험 학급')", [key, year, classNumber]);
+  if (!club) await grantTestJournalClasses(db, "teacher_bootstrap", key);
   await db.query("INSERT INTO users(id,name,login_id,academic_year,role,class_id,password_hash,must_change_password) VALUES($1,'합성 수험생',$1,$2,'student',$3,'unused',FALSE)", [key, year, club ? null : key]);
   await db.query("INSERT INTO teams(id,class_id,club_id,team_number,name) VALUES($1,$2,$3,1,'합성 시험팀')", [key, club ? null : key, club ? key : null]);
   await db.query("INSERT INTO team_members(id,team_id,user_id) VALUES($1,$1,$1)", [key]);

@@ -1,3 +1,4 @@
+import { grantTestJournalClasses } from "@/test/journal-permissions";
 import { expect, it } from "vitest";
 import { getDb } from "@/lib/db";
 import { ACADEMIC_YEAR } from "@/lib/constants";
@@ -8,6 +9,7 @@ import type { ExamGenerator } from "@/lib/exam-ai";
 
 it.each(["unchanged", "remove", "deactivate", "move", "add", "archive", "empty_add", "new_add"])("exam generation rechecks its roster after %s", async action => {
   const db = await getDb(), key = `exam_roster_${action}`, student = `${key}_student`, added = `${key}_added`, target = `${key}_target`;
+  await grantTestJournalClasses(db);
   const classId = (await db.query("SELECT id FROM classes WHERE academic_year=$1 AND class_number=5", [ACADEMIC_YEAR])).rows[0].id;
   for (const id of [student, added]) await db.query("INSERT INTO users(id,name,login_id,academic_year,role,class_id,password_hash,must_change_password) VALUES($1,'합성 수험생',$1,$2,'student',$3,'unused',FALSE)", [id, ACADEMIC_YEAR, classId]);
   for (const id of [key, target]) {
@@ -17,8 +19,7 @@ it.each(["unchanged", "remove", "deactivate", "move", "add", "archive", "empty_a
   await db.query("INSERT INTO team_members(id,team_id,user_id) VALUES($1,$1,$2)", [key, student]);
   let changed = false; let createdTeam: string | undefined;
   const generator: ExamGenerator = {
-    generateCommon: async () => [{ stimulus: "합성 자료", question: "합성 문제", competency: "해석", difficulty: "standard", modelAnswer: "합성 답", rubric: [{ criterion: "근거", points: 1 }], sourceKeys: [] }],
-    generateTeam: async () => {
+    generateCommon: async () => {
       if (!changed) {
         changed = true;
         if (action === "remove") await removeStudent("teacher_bootstrap", student, key);
@@ -29,8 +30,9 @@ it.each(["unchanged", "remove", "deactivate", "move", "add", "archive", "empty_a
         if (action === "new_add") { createdTeam = await createTeam("teacher_bootstrap", 5, 17); await assignStudent("teacher_bootstrap", added, createdTeam); }
         if (action === "archive") await archiveTeam("teacher_bootstrap", key, "5반 합성 시험팀");
       }
-      return { teamQuestions: [], individualQuestions: [] };
+      return [{ stimulus: "합성 자료", question: "합성 문제", competency: "해석", difficulty: "standard", modelAnswer: "합성 답", rubric: [{ criterion: "근거", points: 1 }], sourceKeys: [] }];
     },
+    generateTeam: async () => ({ teamQuestions: [], individualQuestions: [] }),
   };
   const before = (await db.query("SELECT id FROM exam_sets ORDER BY id")).rows;
   const work = generateExamSet("teacher_bootstrap", { classNumber: 5, title: key, commonCount: 1, teamCount: 0, individualCount: 0, totalScore: 1, commonScope: "합성 범위" }, generator);

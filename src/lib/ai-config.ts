@@ -1,6 +1,8 @@
 import type OpenAI from "openai";
 
 export type AiFeature =
+  | "student_record_draft"
+  | "student_record_ocr"
   | "daily_summary"
   | "topic_suggestions"
   | "team_chat"
@@ -18,6 +20,8 @@ type AiRuntime = {
 };
 
 const FEATURE_DEFAULTS: Record<AiFeature, { envName: string; model: string }> = {
+  student_record_draft: { envName: "OPENAI_RECORDS_MODEL", model: "gpt-5.6-sol" },
+  student_record_ocr: { envName: "OPENAI_RECORDS_OCR_MODEL", model: "gpt-5.6-luna" },
   daily_summary: { envName: "OPENAI_SUMMARY_MODEL", model: "gpt-5.6-luna" },
   topic_suggestions: { envName: "OPENAI_TOPIC_MODEL", model: "gpt-5.6-terra" },
   team_chat: { envName: "OPENAI_TEAM_CHAT_MODEL", model: "gpt-5.6-luna" },

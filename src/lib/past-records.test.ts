@@ -95,7 +95,7 @@ describe("지난 기록", () => {
     }
   });
 
-  it("교사는 수업 팀을 공동 조회하고 동아리는 담당 또는 마스터만 검색한다", async () => {
+  it("수업 대화는 공동 조회하되 개인 일지는 허용된 교사만 읽는다", async () => {
     const assigned = await listPastRecordDays(teacher("history_assigned_teacher"), { query: "동아리 기록" });
     const master = await listPastRecordDays(teacher("history_master_teacher", true), { query: "동아리 기록" });
     const unassigned = await listPastRecordDays(teacher("history_unassigned_teacher"), { query: "동아리 기록" });
@@ -106,7 +106,8 @@ describe("지난 기록", () => {
     const classRecords = await listPastRecordDays(teacher("history_unassigned_teacher"), { teamId: "demo_team_1", query: "한글검색" });
     expect(classRecords.days[0]?.teamId).toBe("demo_team_1");
     const teacherDetail = await getPastRecordDay(teacher("history_unassigned_teacher"), { teamId: "demo_team_1", cycleId, date: "2026-09-09" });
-    expect(teacherDetail.journals).toHaveLength(2);
-    expect(teacherDetail.journals.map((item) => item.studentName)).toEqual(expect.arrayContaining(["김하늘", "이새봄"]));
+    expect(teacherDetail.journals).toHaveLength(0);
+    const masterDetail = await getPastRecordDay(teacher("history_master_teacher", true), { teamId: "demo_team_1", cycleId, date: "2026-09-09" });
+    expect(masterDetail.journals).toHaveLength(2);
   });
 });

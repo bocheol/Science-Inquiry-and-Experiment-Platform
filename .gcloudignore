@@ -25,6 +25,8 @@ tsconfig.tsbuildinfo
 scripts/
 src/**/*.test.ts
 src/test/
+tests/
+vitest.postgres.config.ts
 *.md
 AI_QUALITY_CASES.json
 .agents/
