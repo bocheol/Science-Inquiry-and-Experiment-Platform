@@ -2,7 +2,7 @@ import { compare, hash } from "bcryptjs";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ACADEMIC_YEAR, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from "@/lib/constants";
 import { getDb } from "@/lib/db";
 import type { Role, SessionUser } from "@/lib/types";
@@ -44,17 +44,20 @@ export async function authenticate(loginId: string, password: string, academicYe
   return (await authenticateForSession(loginId, password, academicYear))?.userId ?? null;
 }
 
-export async function createSessionToken(session: AuthenticatedSession) {
+export async function createSessionToken(session: AuthenticatedSession, marker = randomUUID()) {
   return new SignJWT({ userId: session.userId, sessionVersion: session.sessionVersion })
     .setProtectedHeader({ alg: "HS256" })
+    .setJti(marker)
     .setIssuedAt()
     .setExpirationTime(`${SESSION_MAX_AGE_SECONDS}s`)
     .sign(getSessionKey());
 }
 
 export async function createSession(session: AuthenticatedSession) {
-  const token = await createSessionToken(session);
+  const marker = randomUUID();
+  const token = await createSessionToken(session, marker);
   const cookieStore = await cookies();
+  cookieStore.set("science-session-marker", marker, { httpOnly: false, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: SESSION_MAX_AGE_SECONDS, path: "/" });
   cookieStore.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -67,6 +70,7 @@ export async function createSession(session: AuthenticatedSession) {
 export async function clearSession() {
   const cookieStore = await cookies();
   cookieStore.delete(SESSION_COOKIE);
+  cookieStore.delete("science-session-marker");
 }
 
 async function sessionUserFromId(userId: string, sessionVersion: number): Promise<SessionUser | null> {
@@ -111,7 +115,8 @@ export async function getSessionUserFromToken(token: string) {
   try {
     const { payload } = await jwtVerify(token, getSessionKey());
     if (typeof payload.userId !== "string" || !Number.isInteger(payload.sessionVersion) || Number(payload.sessionVersion) < 1) return null;
-    return sessionUserFromId(payload.userId, Number(payload.sessionVersion));
+    const user = await sessionUserFromId(payload.userId, Number(payload.sessionVersion));
+    return user ? { ...user, sessionMarker: typeof payload.jti === "string" ? payload.jti : undefined } : null;
   } catch {
     return null;
   }

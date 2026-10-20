@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { PrivateJournalAccessError } from "@/lib/journal-access";
 import { readJsonBody } from "@/lib/request-body";
 import { getCurrentUser } from "@/lib/auth";
 import { userFacingAiError } from "@/lib/ai";
 import {
   addCommonExamQuestion,
   confirmExamSet,
+  reviewConfirmedExamPrivacy,
   createCorrectionExamSet,
   deleteExamQuestionSlot,
   ExamServiceError,
@@ -33,6 +35,7 @@ const generateSchema = z.object({
 const postSchema = z.discriminatedUnion("action", [
   generateSchema,
   z.object({ action: z.literal("confirm"), examSetId: z.string().min(1).max(200) }),
+  z.object({ action: z.literal("privacyReview"), examSetId: z.string().min(1).max(200) }),
   z.object({ action: z.literal("correction"), examSetId: z.string().min(1).max(200), reason: z.string().min(1).max(500) }),
   z.object({
     action: z.literal("grade"), examId: z.string().min(1).max(200),
@@ -52,7 +55,7 @@ const patchSchema = z.object({
 });
 
 function errorResponse(error: unknown) {
-  if (error instanceof ExamServiceError) return Response.json({ message: error.message }, { status: error.status });
+  if (error instanceof ExamServiceError || error instanceof PrivateJournalAccessError) return Response.json({ message: error.message }, { status: error.status });
   return Response.json({ message: userFacingAiError(error) }, { status: 400 });
 }
 
@@ -84,6 +87,7 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, examSetId });
     }
     if (parsed.data.action === "confirm") await confirmExamSet(user.id, parsed.data.examSetId);
+    if (parsed.data.action === "privacyReview") await reviewConfirmedExamPrivacy(user.id, parsed.data.examSetId);
     if (parsed.data.action === "correction") {
       const examSetId = await createCorrectionExamSet(user.id, parsed.data.examSetId, parsed.data.reason);
       return Response.json({ ok: true, examSetId });

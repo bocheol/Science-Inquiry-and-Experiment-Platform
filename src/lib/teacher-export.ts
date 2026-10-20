@@ -37,9 +37,9 @@ export function teamProgressRows(data: TeacherDashboardData, classNumber?: numbe
       탐구주제: safeCell(team.topic || "주제 탐색 중"),
       질문수: team.messageCount,
       계획서: label(planLabels, team.planStatus),
-      일지작성학생: team.journalStudentCount,
+      일지작성학생: team.canReadJournals === false ? "권한 없음" : team.journalStudentCount,
       일지전체학생: team.memberCount,
-      일지건수: team.journalEntryCount,
+      일지건수: team.canReadJournals === false ? "권한 없음" : team.journalEntryCount,
       보고서: label(reportLabels, team.reportStatus),
       준비물: label(materialLabels, team.materialSyncStatus),
       확인필요: safeCell(team.attentionReasons.join(", ") || "없음"),
@@ -56,7 +56,7 @@ export function studentProgressRows(data: TeacherDashboardData, classNumber?: nu
       이름: safeCell(student.name),
       팀: safeCell(student.teamNumber ? `${student.teamNumber}조` : "미배정"),
       역할: student.isLeader ? "팀장" : student.teamId ? "팀원" : "미배정",
-      일지건수: student.journalCount,
+      일지건수: student.canReadJournals === false ? "권한 없음" : student.journalCount,
       최근일지: localDate(student.lastJournalDate),
     }));
 }

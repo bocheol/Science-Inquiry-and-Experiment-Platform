@@ -28,6 +28,7 @@ const nextConfig: NextConfig = {
       { source: "/inquiry/:path*", headers: privateNoStore },
       { source: "/records/:path*", headers: privateNoStore },
       { source: "/teacher/:path*", headers: privateNoStore },
+      { source: "/notices/:path*", headers: privateNoStore },
       { source: "/change-password", headers: privateNoStore },
       { source: "/api/:path*", headers: privateNoStore },
       {

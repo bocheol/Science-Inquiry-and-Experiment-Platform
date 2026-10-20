@@ -75,6 +75,7 @@ const TEACHER_ALLOWED_TEAMS = `
       LEFT JOIN classes c ON c.id = t.class_id
       LEFT JOIN clubs cl ON cl.id = t.club_id
       LEFT JOIN club_teacher_assignments cta ON cta.club_id = cl.id AND cta.teacher_id = au.id
+      LEFT JOIN class_journal_teacher_assignments ja ON ja.class_id = c.id AND ja.teacher_id = au.id
      WHERE ($3::text IS NULL OR t.id = $3)
        AND (
          (c.id IS NOT NULL AND c.academic_year = $2)
@@ -82,8 +83,8 @@ const TEACHER_ALLOWED_TEAMS = `
        )
   )`;
 
-function allowedTeamsSql(actor: Pick<SessionUser, "role">) {
-  return actor.role === "student" ? STUDENT_ALLOWED_TEAMS : TEACHER_ALLOWED_TEAMS;
+function allowedTeamsSql(actor: Pick<SessionUser, "role">, journalsOnly = false) {
+  return actor.role === "student" ? STUDENT_ALLOWED_TEAMS : journalsOnly ? TEACHER_ALLOWED_TEAMS.replace("(c.id IS NOT NULL AND c.academic_year = $2)", "(c.id IS NOT NULL AND c.academic_year = $2 AND (au.is_master OR ja.teacher_id IS NOT NULL))") : TEACHER_ALLOWED_TEAMS;
 }
 
 function asIso(value: Date | string) {
@@ -146,7 +147,7 @@ export async function listPastRecordDays(
         JOIN inquiry_cycles ic ON ic.session_id = s.id
         JOIN discussion_entries e ON e.session_id = s.id AND e.cycle_id = ic.id
       `, params),
-    filter === "conversation" ? empty : db.query<GroupRow>(`WITH ${allowedTeamsSql(actor)}
+    filter === "conversation" ? empty : db.query<GroupRow>(`WITH ${allowedTeamsSql(actor, true)}
       SELECT at.id AS team_id, at.activity_name, at.team_name, ic.id AS cycle_id, ic.title AS cycle_title,
              ic.status AS cycle_status, j.journal_date AS activity_date,
              '1'::text AS record_count, j.session_number::text || '차시 개인 일지' AS representative_title,
@@ -241,7 +242,7 @@ export async function getPastRecordDay(
   const journals = await db.query<{
     id: string; student_name: string; session_number: number; activities: string; observations: string;
     reflections: string; updated_at: Date | string;
-  }>(`WITH ${allowedTeamsSql(actor)}
+  }>(`WITH ${allowedTeamsSql(actor, true)}
       SELECT j.id, u.name AS student_name, j.session_number, j.activities, j.observations,
              j.reflections, j.updated_at
         FROM allowed_teams at

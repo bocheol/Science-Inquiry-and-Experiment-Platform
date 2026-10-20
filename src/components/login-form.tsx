@@ -1,11 +1,10 @@
 "use client";
+import { announcePrivateSessionChange } from "@/lib/private-session";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useToast } from "@/components/toast-provider";
 
 export function LoginForm({ cloudPreview = false }: { cloudPreview?: boolean }) {
-  const router = useRouter();
   const { showToast } = useToast();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -32,8 +31,8 @@ export function LoginForm({ cloudPreview = false }: { cloudPreview?: boolean }) 
       return;
     }
     showToast("로그인되었습니다.");
-    router.replace(result.destination ?? "/");
-    router.refresh();
+    announcePrivateSessionChange();
+    window.location.replace(result.destination ?? "/");
   }
 
   return (

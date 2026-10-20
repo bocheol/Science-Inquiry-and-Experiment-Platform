@@ -1,3 +1,5 @@
+import { PrivateSessionBoundary } from "@/components/private-session-boundary";
+import { getCurrentUser } from "@/lib/auth";
 import type { Metadata, Viewport } from "next";
 import { ToastProvider } from "@/components/toast-provider";
 import "./globals.css";
@@ -24,10 +26,11 @@ export const viewport: Viewport = {
   themeColor: "#146b55",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const user = await getCurrentUser();
   return (
     <html lang="ko">
-      <body><ToastProvider>{children}</ToastProvider></body>
+      <body><PrivateSessionBoundary ownerId={user?.id ?? null} marker={user?.sessionMarker ?? null}><ToastProvider>{children}</ToastProvider></PrivateSessionBoundary></body>
     </html>
   );
 }

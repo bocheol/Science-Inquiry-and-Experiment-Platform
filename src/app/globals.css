@@ -1050,3 +1050,6 @@ a {
  .version-date-filter { flex-direction:row; align-items:end; flex-wrap:wrap; }
  .version-selectors { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:end; }
 }
+
+/* Hide before page snapshots and while a restored page checks its login. */
+html[data-private-locked="true"] [data-private-screen] { visibility: hidden !important; pointer-events: none !important; }

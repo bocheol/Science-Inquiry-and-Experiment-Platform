@@ -4,7 +4,13 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { StudentRecordsWorkspace, type RecordsRequest } from "./workspace";
 import { TeacherRecordEditor } from "./forms";
+import { PrivateSessionBoundary } from "@/components/private-session-boundary";
 import type { RecordWorkspace } from "@/lib/student-records/model";
+
+vi.mock("@/lib/journal-recovery-client", () => ({
+  sealLegacyJournalDrafts: vi.fn(async () => undefined), retryJournalRecoveries: vi.fn(),
+  lockJournalRecoveries: vi.fn(), flushJournalRecoveries: vi.fn(async () => undefined),
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root | null = null;
@@ -18,14 +24,15 @@ const fixture = (): RecordWorkspace => ({
 });
 async function mount(element: ReturnType<typeof createElement>) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); await act(async () => { root!.render(element); }); }
 async function click(button: Element) { await act(async () => { (button as HTMLElement).click(); }); }
-afterEach(async () => { if (root) await act(async () => root!.unmount()); root = null; host?.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { if (root) await act(async () => root!.unmount()); root = null; host?.remove(); vi.unstubAllGlobals(); delete document.documentElement.dataset.privateLocked; document.cookie = "science-session-marker=; max-age=0"; });
 
 describe("record editing and shared-device boundaries", () => {
-  it("keeps unsaved activity text across tab hiding/focus and removes it after another login", async () => {
+  it("preserves unsaved record text inside the journal privacy boundary and clears it after another login", async () => {
     let switched = false;
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => switched ? Response.json({ message: "계정이 변경되었습니다." }, { status: 403 }) : Response.json(url.includes("identity") ? { id: "synthetic-owner" } : fixture())));
+    document.cookie = "science-session-marker=records-owner-marker";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => switched ? Response.json({ message: "계정이 변경되었습니다." }, { status: 403 }) : Response.json(url === "/api/auth/identity" ? { userId: "synthetic-owner", sessionMarker: "records-owner-marker" } : url.includes("identity") ? { id: "synthetic-owner" } : fixture())));
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    await mount(createElement(StudentRecordsWorkspace, { user: { id: "synthetic-owner", role: "student" } }));
+    await mount(createElement(PrivateSessionBoundary, { ownerId: "synthetic-owner", marker: "records-owner-marker", children: createElement(StudentRecordsWorkspace, { user: { id: "synthetic-owner", role: "student" } }) }));
     const textarea = host.querySelector("textarea")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "아직 저장하지 않은 중요한 관찰");
@@ -36,8 +43,9 @@ describe("record editing and shared-device boundaries", () => {
     await act(async () => { Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" }); document.dispatchEvent(new Event("visibilitychange")); });
     expect(host.querySelector("textarea")!.value).toBe("아직 저장하지 않은 중요한 관찰");
     expect(host.querySelector("textarea")!.closest("[hidden]")).toBeNull();
+    expect(document.documentElement.dataset.privateLocked).toBeUndefined();
     switched = true;
-    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await act(async () => { document.cookie = "science-session-marker=records-peer-marker"; window.dispatchEvent(new StorageEvent("storage", { key: "science-private-session-change" })); window.dispatchEvent(new Event("focus")); });
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.textContent).not.toContain("합성 학생 이름");
     expect(host.textContent).not.toContain("아직 저장하지 않은 중요한 관찰");

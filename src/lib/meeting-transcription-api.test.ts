@@ -26,7 +26,7 @@ function request(type = "audio/webm") {
   const data = new FormData();
   data.set("sessionId", "session"); data.set("cycleId", "cycle");
   data.set("audio", new Blob(["synthetic audio"], { type }), "meeting.webm");
-  return new Request("http://localhost/api/discussions/transcribe", { method: "POST", body: data });
+  return new Request("http://localhost/api/discussions/transcribe", { method: "POST", body: data, headers: { "x-expected-user-id": "student" } });
 }
 
 it("authenticates before consuming an audio body", async () => {

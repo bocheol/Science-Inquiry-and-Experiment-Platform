@@ -358,6 +358,49 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     name: "material_amount_without_budget_ceiling",
     sql: "ALTER TABLE material_requests ALTER COLUMN total_amount TYPE BIGINT;",
   },
+  {
+    version: "0013",
+    name: "private_journal_access_and_public_evidence_policy",
+    sql: `CREATE TABLE class_journal_teacher_assignments (
+      class_id TEXT NOT NULL REFERENCES classes(id),
+      teacher_id TEXT NOT NULL REFERENCES users(id),
+      PRIMARY KEY (class_id, teacher_id)
+    );
+    INSERT INTO class_journal_teacher_assignments (class_id, teacher_id)
+      SELECT c.id AS class_id, u.id AS teacher_id FROM classes c JOIN users u ON u.academic_year = c.academic_year
+      WHERE c.academic_year = 2026 AND u.academic_year = 2026 AND u.role = 'teacher' AND u.status = 'active' AND (
+        (u.login_id = 'teacher1' AND u.name = '강석봉' AND c.class_number IN (3,4)) OR
+        (u.login_id = 'teacher2' AND u.name = '김보철' AND c.class_number IN (8,9)) OR
+        (u.login_id = 'teacher3' AND u.name = '김정원' AND c.class_number IN (5,6,7)) OR
+        (u.login_id = 'teacher4' AND u.name = '원창연' AND c.class_number IN (1,2))
+      );
+    ALTER TABLE cycle_evidence_snapshots ADD COLUMN privacy_policy TEXT NOT NULL DEFAULT 'legacy-private-unknown';
+    ALTER TABLE cycle_ai_analyses ADD COLUMN privacy_policy TEXT NOT NULL DEFAULT 'legacy-private-unknown';
+    ALTER TABLE exam_sets ADD COLUMN student_privacy_reviewed BOOLEAN NOT NULL DEFAULT FALSE;`,
+  },
+  {
+    version: "0014",
+    name: "owner_only_encrypted_journal_recovery",
+    sql: `CREATE TABLE journal_recovery_keys (
+      owner_id TEXT PRIMARY KEY REFERENCES users(id), key_data TEXT NOT NULL
+    );
+    CREATE TABLE journal_recovery_seal_key (
+      id TEXT PRIMARY KEY, public_key TEXT NOT NULL, private_key TEXT NOT NULL
+    );
+    CREATE TABLE journal_recovery_assets (
+      owner_id TEXT NOT NULL REFERENCES users(id), asset_id TEXT NOT NULL,
+      encrypted_data TEXT NOT NULL, byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+      PRIMARY KEY (owner_id, asset_id)
+    );
+    CREATE TABLE journal_recovery_drafts (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id),
+      session_id TEXT NOT NULL REFERENCES inquiry_sessions(id), cycle_id TEXT NOT NULL REFERENCES inquiry_cycles(id),
+      revision INTEGER NOT NULL CHECK (revision > 0), encrypted_data TEXT,
+      asset_ids JSONB NOT NULL, deleted BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX idx_journal_recovery_owner_scope ON journal_recovery_drafts(owner_id, session_id, cycle_id);`,
+  },
   STUDENT_RECORDS_MIGRATION,
 ];
 

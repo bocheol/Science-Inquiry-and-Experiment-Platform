@@ -10,7 +10,7 @@ export async function GET(request: Request) {
   const format = params.get("format") === "csv" ? "csv" : "xlsx";
   const parsedClass = Number(params.get("classNumber"));
   const classNumber = Number.isInteger(parsedClass) && parsedClass >= 1 && parsedClass <= 9 ? parsedClass : undefined;
-  const data = await getTeacherDashboardData();
+  const data = await getTeacherDashboardData(user.id);
   const body = buildTeacherProgressExport(data, format, classNumber);
   const scope = classNumber ? `${classNumber}반` : "전체";
   const filename = `science-progress-${classNumber ? `class-${classNumber}` : "all"}.${format}`;

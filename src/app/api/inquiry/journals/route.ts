@@ -1,3 +1,5 @@
+import { normalizeJournalPhoto } from "@/lib/journal-photo";
+import { requestMatchesUser } from "@/lib/session-bound-request";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
@@ -23,9 +25,9 @@ const journalSchema = z.object({
   cycleId: z.string().trim().min(1).max(200),
   sessionNumber: z.coerce.number().int().min(1).max(100),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  activities: z.string().trim().min(1, "오늘 한 일을 적어 주세요.").max(10_000),
-  observations: z.string().trim().min(1, "관찰 결과를 적어 주세요.").max(10_000),
-  reflections: z.string().trim().max(10_000),
+  activities: z.string().max(10_000),
+  observations: z.string().max(10_000),
+  reflections: z.string().max(10_000),
   expectedVersion: z.number().int().min(0).nullable(),
   existingImageIds: z.array(z.string().trim().min(1).max(200)).max(JOURNAL_MAX_IMAGES),
   photoClientIds: z.array(z.string().trim().min(8).max(200)).max(JOURNAL_MAX_IMAGES),
@@ -39,7 +41,7 @@ function errorResponse(error: unknown, fallback: string) {
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
-  if (!user || user.role !== "student" || user.mustChangePassword) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
+  if (!user || user.role !== "student" || user.mustChangePassword || !requestMatchesUser(request, user)) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
   const parsed = querySchema.safeParse(new URL(request.url).searchParams.get("sessionId"));
   if (!parsed.success) return NextResponse.json({ message: "탐구 세션을 확인해 주세요." }, { status: 400 });
   const cycle = querySchema.optional().safeParse(new URL(request.url).searchParams.get("cycleId") ?? undefined);
@@ -53,7 +55,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
-  if (!user || user.role !== "student" || user.mustChangePassword) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
+  if (!user || user.role !== "student" || user.mustChangePassword || !requestMatchesUser(request, user)) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
   try {
     const body = await readFormDataBody(request, JOURNAL_BODY_MAX_BYTES);
     if (body.kind === "too-large") return NextResponse.json({ message: "일지 업로드 전체 크기가 너무 큽니다. 사진은 5장까지, 한 장당 5MB 이하로 첨부해 주세요." }, { status: 413 });
@@ -88,6 +90,7 @@ export async function POST(request: Request) {
     if (files.length !== parsed.data.photoClientIds.length || files.length + parsed.data.existingImageIds.length > JOURNAL_MAX_IMAGES) {
       return NextResponse.json({ message: `사진은 차시당 ${JOURNAL_MAX_IMAGES}장까지 첨부할 수 있습니다.` }, { status: 400 });
     }
+    if (![parsed.data.activities, parsed.data.observations, parsed.data.reflections].some(value => value.trim()) && !files.length && !parsed.data.existingImageIds.length) return NextResponse.json({ message: "글 한 항목이나 사진을 추가해 주세요." }, { status: 400 });
     const photos: JournalPhotoInput[] = [];
     for (const [index, file] of files.entries()) {
       const data = Buffer.from(await file.arrayBuffer());
@@ -96,12 +99,12 @@ export async function POST(request: Request) {
       }
       const contentType = detectJournalImageType(data);
       if (!contentType) return NextResponse.json({ message: "실제 JPG, PNG, WebP 사진만 첨부할 수 있습니다." }, { status: 400 });
-      photos.push({
+      photos.push(await normalizeJournalPhoto({
         clientId: parsed.data.photoClientIds[index]!,
         contentType,
         fileName: file.name.slice(0, 255) || `journal-photo-${index + 1}`,
         data,
-      });
+      }));
     }
     const journal = await saveStudentJournal(user, { ...parsed.data, photos });
     return NextResponse.json({ ok: true, journal });
