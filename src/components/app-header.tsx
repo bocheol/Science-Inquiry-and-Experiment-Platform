@@ -57,6 +57,7 @@ export function AppHeader({ name, role }: { name: string; role: "student" | "tea
           <span>과탐실</span>
         </a>
         <div className="user-chip">
+          <a className="header-notice-link" href="/records">세특 커스텀</a>
           {role === "student" ? <a className="header-notice-link" href="/notices">공지·알림{feed?.unreadCount ? <span className="notice-count" aria-label={`읽지 않은 공지 ${feed.unreadCount}개`}>{feed.unreadCount > 99 ? "99+" : feed.unreadCount}</span> : null}</a> : <a className="header-notice-link" href="/teacher/notices">공지 관리</a>}
           <span>{name} · {role === "teacher" ? "교사" : "학생"}</span>
           <form action="/api/auth/logout" method="post">

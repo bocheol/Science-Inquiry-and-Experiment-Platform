@@ -6,3 +6,4 @@ for (const key of ["DATABASE_URL", "INSTANCE_UNIX_SOCKET", "DB_USER", "DB_PASSWO
 process.env.SESSION_SECRET = "synthetic-test-session-only";
 process.env.BOOTSTRAP_TEACHER_LOGIN = "teacher";
 process.env.BOOTSTRAP_TEACHER_PASSWORD = "synthetic-test-teacher-only";
+for (const key of Object.keys(process.env).filter(key => key.startsWith("RECORDS_"))) process.env[key] = "";
