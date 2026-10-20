@@ -105,30 +105,36 @@ it("deduplicates simultaneous teacher/student uploads and protects original byte
 });
 
 it("rechecks a revoked account after waiting for the account row lock", async () => {
+  // File uploads legitimately increment the submission revision. Compare the
+  // complete current row so a denied save cannot silently mutate any field.
+  const previous = (await db.query("SELECT * FROM record_submissions WHERE student_id=$1", [owner.id])).rows[0];
   const blocker = await db.connect();
   let pending: Promise<unknown> | undefined;
+  let committed = false;
   try {
     await blocker.query("BEGIN");
     await blocker.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [owner.id]);
     // Convert rejection immediately so the expected 403 is never unhandled.
-    pending = saveRecordSubmission(owner, owner.id, { expectedRevision: 1, selected: ["egg", "spectrum"], comments: {}, submit: true }).then(value => ({ value }), error => ({ error }));
+    pending = saveRecordSubmission(owner, owner.id, { expectedRevision: previous.revision, selected: ["egg", "spectrum"], comments: {}, submit: true }).then(value => ({ value }), error => ({ error }));
     await vi.waitFor(async () => {
       const waiting = await db.query("SELECT COUNT(*)::int AS n FROM pg_stat_activity WHERE application_name='science-inquiry-integration-tests' AND wait_event_type='Lock'");
       expect(waiting.rows[0].n).toBeGreaterThan(0);
     }, { timeout: 5000, interval: 20 });
     await blocker.query("UPDATE users SET status='inactive' WHERE id=$1", [owner.id]);
     await blocker.query("COMMIT");
+    committed = true;
     expect(await pending).toMatchObject({ error: { status: 403 } });
-    expect((await db.query("SELECT revision FROM record_submissions WHERE student_id=$1", [owner.id])).rows[0].revision).toBe(1);
+    expect((await db.query("SELECT * FROM record_submissions WHERE student_id=$1", [owner.id])).rows[0]).toEqual(previous);
   } finally {
-    await blocker.query("ROLLBACK"); blocker.release(); await pending;
+    if (!committed) await blocker.query("ROLLBACK");
+    blocker.release(); await pending;
     await db.query("UPDATE users SET status='active' WHERE id=$1", [owner.id]);
   }
 });
 
 it("finalizes exactly 1500 bytes, hides teacher prose and rejects changed evidence", async () => {
   const workspace = await getRecordWorkspace(teacher, owner.id);
-  const input = { expectedRevision: 0, expectedSubmissionRevision: 1, expectedEvidenceHash: workspace.evidence!.hash, course1: "가".repeat(400), course2: "A".repeat(300), notes: "합성 검증: 미접수 답안은 활용하지 않음", checkedGroups: ["team_plan", "journal", "team_report", "exam"], finalize: true };
+  const input = { expectedRevision: 0, expectedSubmissionRevision: workspace.submission.revision, expectedEvidenceHash: workspace.evidence!.hash, course1: "가".repeat(400), course2: "A".repeat(300), notes: "합성 검증: 미접수 답안은 활용하지 않음", checkedGroups: ["team_plan", "journal", "team_report", "exam"], finalize: true };
   await expect(saveRecordDraft(teacher, owner.id, { ...input, course2: input.course2 + "A" })).rejects.toThrow("1,500");
   await saveRecordDraft(teacher, owner.id, input);
   expect((await getRecordWorkspace(owner, owner.id)).draft).toBeUndefined();
