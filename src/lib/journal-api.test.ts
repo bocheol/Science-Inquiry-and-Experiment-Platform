@@ -19,7 +19,7 @@ function request(expectedVersion?: string) {
   data.set("activities", "합성 활동"); data.set("observations", "합성 관찰"); data.set("reflections", "");
   data.set("existingImageIds", "[]"); data.set("photoClientIds", "[]");
   if (expectedVersion !== undefined) data.set("expectedVersion", expectedVersion);
-  return new Request("http://localhost/api/inquiry/journals", { method: "POST", body: data });
+  return new Request("http://localhost/api/inquiry/journals", { method: "POST", body: data, headers: { "x-expected-user-id": "journal_api_student" } });
 }
 
 beforeEach(() => { mocks.save.mockReset(); mocks.list.mockReset(); });
@@ -50,4 +50,16 @@ it("passes a nullable base and returns the confirmed saved version", async () =>
   expect(response.status).toBe(200);
   expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ id: "journal_api_student" }), expect.objectContaining({ expectedVersion: null }));
   expect(await response.json()).toMatchObject({ journal: { version: 1 } });
+});
+
+it("rejects a delayed write from another account before accessing the journal service", async () => {
+  const stale = request("null"); stale.headers.set("x-expected-user-id", "previous-owner");
+  expect((await POST(stale)).status).toBe(403); expect(mocks.save).not.toHaveBeenCalled();
+});
+it("accepts only observations and rejects a completely empty draft", async () => {
+  const data = await request("null").formData(); data.set("activities", "");
+  mocks.save.mockResolvedValue({ id: "journal", version: 1 });
+  const make = () => new Request("http://localhost/api/inquiry/journals", { method: "POST", body: data, headers: { "x-expected-user-id": "journal_api_student" } });
+  expect((await POST(make())).status).toBe(200);
+  data.set("observations", ""); expect((await POST(make())).status).toBe(400);
 });

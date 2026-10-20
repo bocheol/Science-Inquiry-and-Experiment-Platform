@@ -1,3 +1,4 @@
+import { grantTestJournalClasses } from "@/test/journal-permissions";
 import { expect, it } from "vitest";
 import { getDb } from "@/lib/db";
 import { generateExamSet, getExamManagementData } from "@/lib/exam-service";
@@ -5,6 +6,7 @@ import type { ExamGenerator, ExamSourceItem, GeneratedExamQuestion } from "@/lib
 
 it("pins each selected journal from repeated lesson numbers to its own cycle and original record", async () => {
   const db = await getDb();
+  await grantTestJournalClasses(db);
   const team = "exam_cycle_source_team", student = "exam_cycle_source_student";
   await db.query("INSERT INTO teams (id,class_id,team_number,name) VALUES ($1,'class_2026_7',1,'합성 시험 팀')", [team]);
   await db.query("INSERT INTO inquiry_sessions (id,team_id) VALUES ($1,$1)", [team]);

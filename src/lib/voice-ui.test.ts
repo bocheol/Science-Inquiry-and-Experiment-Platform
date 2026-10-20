@@ -13,7 +13,7 @@ it("states that live AI never receives journals and does not save the live conve
 
 it("keeps meeting transcription in the existing reviewed memo flow", () => {
   const html = renderToStaticMarkup(React.createElement(MeetingAudioInput, {
-    sessionId: "session", cycleId: "cycle", value: "", onChange: () => undefined,
+    sessionId: "session", cycleId: "cycle", currentUserId: "student", value: "", onChange: () => undefined,
   }));
   expect(html).toContain("음성으로 메모");
   expect(html).toContain("녹음 파일은 전사에만 사용하고 보관하지 않습니다");

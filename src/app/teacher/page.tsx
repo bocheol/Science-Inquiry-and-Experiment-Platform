@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 export default async function TeacherPage() {
   const user = await requireUser("teacher");
-  const data = await getTeacherDashboardData();
+  const data = await getTeacherDashboardData(user.id);
   const clubs = await getClubManagement(user.id);
   return (
     <>

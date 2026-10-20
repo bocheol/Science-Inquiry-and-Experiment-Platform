@@ -1,3 +1,4 @@
+import { grantTestJournalClasses } from "@/test/journal-permissions";
 import { beforeAll, describe, expect, it } from "vitest";
 import { getDb } from "@/lib/db";
 import { createId } from "@/lib/id";
@@ -33,6 +34,7 @@ const teacher: SessionUser = {
 
 beforeAll(async () => {
   const db = await getDb();
+  await grantTestJournalClasses(db);
   await db.query(
     `INSERT INTO users (id, name, login_id, academic_year, role, class_id, password_hash, must_change_password)
      VALUES ($1, '작성 학생', 'test-owner', 2026, 'student', 'class_2026_1', 'unused', FALSE),

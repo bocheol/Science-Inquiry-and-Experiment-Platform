@@ -109,7 +109,7 @@ function parseJson<T>(value: T | string | null, fallback: T): T {
   return value;
 }
 
-async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
+async function buildInquiryData(teamId: string, teacherId?: string): Promise<InquiryData | null> {
   const db = await getDb();
   const teamResult = await db.query<{
     id: string;
@@ -300,7 +300,7 @@ async function buildInquiryData(teamId: string): Promise<InquiryData | null> {
   const [planHistory, reportHistory, cycleJourney] = await Promise.all([
     getDocumentHistory("plan", plan.id, cycle?.id),
     getDocumentHistory("report", report.id, cycle?.id),
-    getCycleJourney(team.session_id),
+    getCycleJourney(team.session_id, teacherId),
   ]);
   const customTabsResult = team.club_id ? await db.query<{
     id: string; title: string; definition: InquiryData["customTabs"][number]["definition"] | string;
@@ -443,8 +443,8 @@ export async function getInquiryDataForUser(userId: string, selectedTeamId?: str
   return teamId ? buildInquiryData(teamId) : null;
 }
 
-export async function getInquiryDataForTeam(teamId: string) {
-  return buildInquiryData(teamId);
+export async function getInquiryDataForTeam(teamId: string, teacherId?: string) {
+  return buildInquiryData(teamId, teacherId);
 }
 
 export async function assertActiveTeamMember(userId: string, sessionId: string) {

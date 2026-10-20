@@ -1,3 +1,4 @@
+import { requestMatchesUser } from "@/lib/session-bound-request";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { audit } from "@/lib/db";
@@ -23,7 +24,7 @@ function failure(error: unknown) {
 
 export async function POST(request: Request) {
   const actor = await getCurrentUser();
-  if (!actor || actor.role !== "student" || actor.mustChangePassword) {
+  if (!actor || actor.role !== "student" || actor.mustChangePassword || !requestMatchesUser(request, actor)) {
     return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
   }
   try {

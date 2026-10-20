@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { PrivateJournalAccessError } from "@/lib/journal-access";
 import { ExamServiceError, getExamSetForPdf } from "@/lib/exam-service";
 import { buildExamPdf } from "@/lib/exam-pdf";
 
@@ -24,7 +25,8 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    const status = error instanceof ExamServiceError ? error.status : 400;
-    return Response.json({ message: error instanceof ExamServiceError ? error.message : "PDF를 만들지 못했습니다. 잠시 후 다시 시도해 주세요." }, { status });
+    const expected = error instanceof ExamServiceError || error instanceof PrivateJournalAccessError;
+    const status = expected ? error.status : 400;
+    return Response.json({ message: expected ? error.message : "PDF를 만들지 못했습니다. 잠시 후 다시 시도해 주세요." }, { status });
   }
 }

@@ -1,3 +1,4 @@
+import { journalTeacherClasses } from "@/lib/journal-access";
 import { getDb } from "@/lib/db";
 import { ACADEMIC_YEAR } from "@/lib/constants";
 
@@ -14,6 +15,7 @@ export type TeacherDashboardData = {
     isLeader: boolean;
     mustChangePassword: boolean;
     journalCount: number;
+    canReadJournals?: boolean;
     lastJournalDate: string | null;
   }>;
   inactiveStudents: Array<{
@@ -37,6 +39,7 @@ export type TeacherDashboardData = {
     messageCount: number;
     journalStudentCount: number;
     journalEntryCount: number;
+    canReadJournals?: boolean;
     materialSyncStatus: string | null;
     materialBudgetStatus: string | null;
     lastActivityAt: string | null;
@@ -74,6 +77,7 @@ function attentionFor(team: {
   materialBudgetStatus: string | null;
   memberCount: number;
   journalStudentCount: number;
+  canReadJournals?: boolean;
 }) {
   const teacherReasons: string[] = [];
   const studentReasons: string[] = [];
@@ -86,7 +90,7 @@ function attentionFor(team: {
   if (!team.sessionId) studentReasons.push("탐구 시작 전");
   else if (!team.planStatus || team.planStatus === "draft") studentReasons.push("계획서 작성 필요");
   else if (team.planStatus === "feedback") studentReasons.push("계획서 수정 필요");
-  if (team.planStatus === "approved" && team.journalStudentCount < team.memberCount) {
+  if (team.canReadJournals !== false && team.planStatus === "approved" && team.journalStudentCount < team.memberCount) {
     studentReasons.push(`일지 미작성 ${team.memberCount - team.journalStudentCount}명`);
   }
   if (team.reportStatus === "feedback") studentReasons.push("보고서 수정 필요");
@@ -96,8 +100,9 @@ function attentionFor(team: {
   return { attention: "none" as const, attentionReasons: [] };
 }
 
-export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
+export async function getTeacherDashboardData(teacherId?: string): Promise<TeacherDashboardData> {
   const db = await getDb();
+  const allowedClasses = teacherId ? new Set((await journalTeacherClasses(db, teacherId)).map(c => c.class_number)) : null;
   const [studentResult, inactiveStudentResult, teamResult, archivedTeamResult, memberCounts, messageCounts, journalCounts, materialRows] = await Promise.all([
     db.query<{
       id: string; name: string; login_id: string; class_number: number; team_id: string | null;
@@ -178,7 +183,7 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
 
   const memberCountMap = new Map(memberCounts.rows.map((row) => [row.team_id, Number(row.count)]));
   const messageCountMap = new Map(messageCounts.rows.map((row) => [row.session_id, Number(row.count)]));
-  const journalMap = new Map(journalCounts.rows.map((row) => [
+  const journalMap = new Map(journalCounts.rows.filter(row => !allowedClasses || teamResult.rows.some(team => team.session_id === row.session_id && allowedClasses.has(team.class_number))).map((row) => [
     `${row.session_id}:${row.student_id}`,
     { count: Number(row.count), lastJournalAt: toIso(row.last_journal_at) },
   ]));
@@ -199,6 +204,7 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
       isLeader: row.leader_user_id === row.id,
       mustChangePassword: row.must_change_password,
       journalCount: journal?.count ?? 0,
+      canReadJournals: !allowedClasses || allowedClasses.has(row.class_number),
       lastJournalDate: journal?.lastJournalAt ?? null,
     };
   });
@@ -229,6 +235,7 @@ export async function getTeacherDashboardData(): Promise<TeacherDashboardData> {
       reportStatus: row.report_status,
       messageCount: row.session_id ? messageCountMap.get(row.session_id) ?? 0 : 0,
       journalStudentCount: memberJournals.length,
+      canReadJournals: !allowedClasses || allowedClasses.has(row.class_number),
       journalEntryCount: memberJournals.reduce((sum, journal) => sum + journal.count, 0),
       materialSyncStatus: material?.sync_status ?? null,
       materialBudgetStatus: material?.budget_status ?? null,

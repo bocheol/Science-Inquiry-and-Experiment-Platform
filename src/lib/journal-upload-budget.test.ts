@@ -8,6 +8,7 @@ vi.mock("@/lib/journal-service", () => ({
   detectJournalImageType: () => "image/png",
   listStudentJournals: vi.fn(), saveStudentJournal: mocks.save,
 }));
+vi.mock("@/lib/journal-photo", () => ({ normalizeJournalPhoto: async (photo: unknown) => photo }));
 import { POST } from "@/app/api/inquiry/journals/route";
 
 beforeEach(() => {
@@ -22,7 +23,7 @@ function streamedRequest(length?: string) {
     pull(controller) { pulls++; controller.enqueue(new Uint8Array(1024 * 1024)); },
     cancel,
   }, { highWaterMark: 0 });
-  const headers = new Headers({ "content-type": "multipart/form-data; boundary=synthetic-budget" });
+  const headers = new Headers({ "x-expected-user-id": "synthetic-uploader", "content-type": "multipart/form-data; boundary=synthetic-budget" });
   if (length !== undefined) headers.set("content-length", length);
   const request = new Request("http://localhost/api/inquiry/journals", {
     method: "POST", headers, body: stream, duplex: "half",
@@ -58,7 +59,7 @@ it("keeps authentication ahead of body consumption", async () => {
 
 it("rejects malformed multipart without storing a journal", async () => {
   const request = new Request("http://localhost/api/inquiry/journals", {
-    method: "POST", headers: { "content-type": "multipart/form-data; boundary=missing" }, body: "invalid",
+    method: "POST", headers: { "x-expected-user-id": "synthetic-uploader", "content-type": "multipart/form-data; boundary=missing" }, body: "invalid",
   });
   expect((await POST(request)).status).toBe(400);
   expect(mocks.save).not.toHaveBeenCalled();
@@ -71,7 +72,7 @@ it("accepts five maximum-size photos and maximum Korean text", async () => {
   const photoIds = Array.from({ length: 5 }, (_, i) => `synthetic-photo-${i}`);
   data.set("photoClientIds", JSON.stringify(photoIds));
   for (const id of photoIds) data.append("photos", new Blob([new Uint8Array(5 * 1024 * 1024)], { type: "image/png" }), `${id}.png`);
-  expect((await POST(new Request("http://localhost/api/inquiry/journals", { method: "POST", body: data }))).status).toBe(200);
+  expect((await POST(new Request("http://localhost/api/inquiry/journals", { method: "POST", body: data, headers: { "x-expected-user-id": "synthetic-uploader" } }))).status).toBe(200);
   expect(mocks.save).toHaveBeenCalledOnce();
   expect(mocks.save.mock.calls[0][1].photos).toHaveLength(5);
 });

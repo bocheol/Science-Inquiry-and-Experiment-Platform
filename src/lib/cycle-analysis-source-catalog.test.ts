@@ -1,9 +1,11 @@
+import { TEAM_PUBLIC_EVIDENCE_POLICY } from "@/lib/journal-privacy-policy";
 import { expect, it } from "vitest";
 import { prepareCycleAnalysisInput } from "@/lib/cycle-analysis";
 import type { CycleEvidenceSnapshot } from "@/lib/cycle-evidence";
 
 const snapshot: CycleEvidenceSnapshot = {
   id: "snapshot-current",
+  privacyPolicy: TEAM_PUBLIC_EVIDENCE_POLICY,
   planSnapshotId: "plan-snapshot-current",
   contentHash: "synthetic-hash",
   createdAt: "2026-09-09T00:00:00.000Z",
