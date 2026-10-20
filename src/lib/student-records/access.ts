@@ -27,7 +27,7 @@ export async function assertRecordStudent(db: RecordDb, actor: RecordActor, stud
     `SELECT s.id, s.name, s.login_id, s.class_id, c.class_number, s.status, a.teacher_id
      FROM users s JOIN classes c ON c.id = s.class_id
      LEFT JOIN record_teacher_classes a ON a.class_id = c.id
-     WHERE s.id = $1 AND s.role = 'student' AND s.academic_year = $2 AND c.academic_year = $2`, [studentId, ACADEMIC_YEAR])).rows[0];
+     WHERE s.id = $1 AND s.role = 'student' AND s.account_type = 'standard' AND s.academic_year = $2 AND c.academic_year = $2`, [studentId, ACADEMIC_YEAR])).rows[0];
   if (!student || (actor.role === "student" ? student.id !== actor.id : student.teacher_id !== actor.id)) {
     throw new RecordError("본인 또는 담당 반의 학생 자료만 열 수 있습니다.", 403);
   }
@@ -58,7 +58,7 @@ export async function teacherRecordStudents(actor: RecordActor): Promise<RecordS
   const rows = (await db.query<{ id: string; name: string; login_id: string; class_number: number; status: string; submission_status: string | null; draft_status: string | null }>(
     `SELECT s.id, s.name, s.login_id, c.class_number, s.status, r.status AS submission_status, d.status AS draft_status
      FROM record_teacher_classes a JOIN classes c ON c.id = a.class_id
-     JOIN users s ON s.class_id = c.id AND s.role = 'student'
+     JOIN users s ON s.class_id = c.id AND s.role = 'student' AND s.account_type = 'standard'
      LEFT JOIN record_submissions r ON r.student_id = s.id LEFT JOIN record_drafts d ON d.student_id = s.id
      WHERE a.teacher_id = $1 AND c.academic_year = $2 AND s.academic_year = $2 ORDER BY c.class_number, s.login_id`, [actor.id, ACADEMIC_YEAR])).rows;
   return rows.map(s => ({ id: s.id, name: s.name, loginId: s.login_id, classNumber: s.class_number, status: s.status, submissionStatus: s.submission_status ?? "draft", draftStatus: s.draft_status ?? "draft" }));

@@ -16,6 +16,7 @@ beforeAll(async () => {
   const db = await getDb();
   await db.query("INSERT INTO record_teacher_classes (class_id, teacher_id) VALUES ('class_2026_9', $1)", [teacher.id]);
   await db.query("INSERT INTO users (id,name,login_id,academic_year,role,password_hash,must_change_password,is_master) VALUES ($1,'별도 교사','record-other',2026,'teacher','unused',FALSE,TRUE)", [other.id]);
+  await db.query("INSERT INTO users (id,name,login_id,academic_year,role,class_id,password_hash,must_change_password,account_type) VALUES ('record_demo','체험 계정','demo-record',2026,'student','class_2026_9','unused',FALSE,'demo')");
   await db.query("UPDATE team_members SET joined_at = '2026-09-01' WHERE team_id = 'demo_team_1'");
   const cycle = (await db.query("SELECT id FROM inquiry_cycles WHERE session_id = 'demo_session_1'")).rows[0].id;
   await db.query("UPDATE investigation_plans SET form_data = $1 WHERE id = 'demo_plan_1'", [JSON.stringify({ topic: "과탐실2 전용 팀계획", expectedResult: "아직 수행하지 않은 예상 결과" })]);
@@ -51,6 +52,11 @@ describe("records boundaries and privacy", () => {
     await expect(getRecordWorkspace(other, student.id)).rejects.toMatchObject({ status: 403 });
     expect(await teacherRecordStudents(other)).toEqual([]);
     expect((await teacherRecordStudents(teacher)).map(s => s.classNumber)).toEqual([9, 9, 9]);
+    // A demo remains excluded from the export roster and direct access even if
+    // it happens to have a class assignment.
+    await expect(getRecordWorkspace(teacher, "record_demo")).rejects.toMatchObject({ status: 403 });
+    await expect(getRecordWorkspace({ ...student, id: "record_demo" }, "record_demo")).rejects.toMatchObject({ status: 403 });
+    await expect(uploadRecordFile(teacher, "record_demo", "individual_plan", "demo.pdf", Buffer.from("%PDF-1.7\nsynthetic"))).rejects.toMatchObject({ status: 403 });
     await db.query("UPDATE users SET status = 'inactive' WHERE id = $1", [student.id]);
     await expect(getRecordWorkspace(student, student.id)).rejects.toMatchObject({ status: 403 });
     await db.query("UPDATE users SET status = 'active' WHERE id = $1", [student.id]);
