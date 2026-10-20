@@ -23,12 +23,27 @@ async function extract(data, mime) {
   });
 }
 
-const PDFDocument = require("pdfkit");
-const pdf = await new Promise(resolve => {
-  const doc = new PDFDocument(); const parts = [];
-  doc.on("data", part => parts.push(part)); doc.on("end", () => resolve(Buffer.concat(parts)));
-  doc.text("Packaged standalone inquiry evidence"); doc.end();
-});
+// PDFKit is bundled into Next's server chunks, not an external runner module.
+// A tiny valid PDF fixture keeps this check focused on the deployed parser.
+const stream = "BT /F1 12 Tf 72 700 Td (Packaged standalone inquiry evidence) Tj ET";
+const objects = [
+  "<< /Type /Catalog /Pages 2 0 R >>",
+  "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+  "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+  "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+];
+let document = "%PDF-1.4\n";
+const offsets = [];
+for (const [index, object] of objects.entries()) {
+  offsets.push(Buffer.byteLength(document));
+  document += `${index + 1} 0 obj\n${object}\nendobj\n`;
+}
+const xref = Buffer.byteLength(document);
+document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+document += offsets.map(offset => String(offset).padStart(10, "0") + " 00000 n \n").join("");
+document += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+const pdf = Buffer.from(document);
 assert.match(await extract(pdf, "application/pdf"), /Packaged standalone inquiry evidence/);
 
 const CFB = require("cfb");
@@ -45,4 +60,4 @@ assert.match(await extract(docx, "application/vnd.openxmlformats-officedocument.
 const sharp = require("sharp");
 const jpeg = await sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).jpeg().toBuffer();
 assert.equal((await sharp(jpeg).metadata()).format, "jpeg");
-console.log(JSON.stringify({ standaloneImage: "passed", network: "disabled", formats: ["PDF", "HWP", "DOCX", "JPEG"], studentData: "none" }));
+console.log(JSON.stringify({ standaloneImage: "passed", formats: ["PDF", "HWP", "DOCX", "JPEG"], studentData: "none" }));
