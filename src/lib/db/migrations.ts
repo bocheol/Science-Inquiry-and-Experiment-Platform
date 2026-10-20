@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
+import { STUDENT_RECORDS_MIGRATION } from "@/lib/student-records/migration";
 
 export type DatabaseMigration = {
   version: string;
@@ -357,6 +358,7 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     name: "material_amount_without_budget_ceiling",
     sql: "ALTER TABLE material_requests ALTER COLUMN total_amount TYPE BIGINT;",
   },
+  STUDENT_RECORDS_MIGRATION,
 ];
 
 function checksum(migration: DatabaseMigration) {

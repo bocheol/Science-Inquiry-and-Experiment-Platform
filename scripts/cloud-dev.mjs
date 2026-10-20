@@ -32,7 +32,7 @@ export function safeEnvironment(base = process.env, options = {}) {
   const fileKeys = options.envKeys ?? readdirSync(root)
     .filter((name) => /^\.env(?:\.|$)/.test(name) && name !== ".env.example")
     .flatMap((name) => [...readFileSync(join(root, name), "utf8").matchAll(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1]));
-  for (const key of new Set([...externalKeys, ...fileKeys, ...Object.keys(env).filter((key) => /^(GOOGLE_|GCLOUD_|CLOUDSDK_|PG|DB_|OPENAI_|VAPID_|NEXT_PUBLIC_)/.test(key))])) env[key] = "";
+  for (const key of new Set([...externalKeys, ...fileKeys, ...Object.keys(env).filter((key) => /^(RECORDS_|GOOGLE_|GCLOUD_|CLOUDSDK_|PG|DB_|OPENAI_|VAPID_|NEXT_PUBLIC_)/.test(key))])) env[key] = "";
   env.ACADEMIC_YEAR = "2026";
   env.NEXT_TELEMETRY_DISABLED = "1";
   env.DATABASE_SSL = "false";
