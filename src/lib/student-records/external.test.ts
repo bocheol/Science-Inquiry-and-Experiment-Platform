@@ -15,6 +15,11 @@ vi.mock("google-auth-library", () => ({
 }));
 const teacher: RecordActor = { id: "teacher_bootstrap", role: "teacher", mustChangePassword: false };
 const student: RecordActor = { id: "demo_student_1", role: "student", mustChangePassword: false };
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 beforeAll(async () => {
   const db = await getDb();
   await db.query("INSERT INTO record_teacher_classes (class_id,teacher_id) VALUES ('class_2026_9',$1)", [teacher.id]);
@@ -93,7 +98,7 @@ describe("external service boundaries with synthetic transports", () => {
       if (url.includes(":batchUpdate")) return Response.json({ replies: [{ addSheet: { properties: { sheetId: 78 } } }] });
       return Response.json({ sheets: [] });
     });
-    const ready = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>();
+    const ready = deferredSignal(), resume = deferredSignal();
     let calls = 0;
     provider.headers.mockImplementation(async () => {
       if (++calls === 3) { ready.resolve(); await resume.promise; }

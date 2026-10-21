@@ -27,6 +27,11 @@ const teacher: RecordActor = { id: "integration_teacher2", role: "teacher", must
 const shared: RecordActor = { id: "integration_teacher1", role: "teacher", mustChangePassword: false };
 const master: RecordActor = { id: "integration_master", role: "teacher", mustChangePassword: false };
 const globals = globalThis as typeof globalThis & { __sciencePool?: Pool; __scienceDbReady?: Promise<Pool> };
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 
 beforeAll(async () => {
   // Opt-in, loopback-only and empty-database checks prevent accidental production use.
@@ -223,7 +228,7 @@ async function waitForLockCount(n: number) {
 it("serializes a two-student export and concurrent journal revocation with real PostgreSQL locks", async () => {
   await prepareFinalBatch();
   const requestId = "synthetic-postgres-batch-locks";
-  const responseGate = Promise.withResolvers<void>();
+  const responseGate = deferredSignal();
   let sent = false, revoked = false, rows: unknown[][] = [];
   vi.stubGlobal("fetch", syntheticExportTransport(requestId, async init => {
     rows = JSON.parse(init.body as string).values;
@@ -265,7 +270,7 @@ it("serializes a two-student export and concurrent journal revocation with real 
 
 it("does not transmit either student's prose when revocation commits during Google authentication", async () => {
   const requestId = "synthetic-postgres-delayed-auth";
-  const authGate = Promise.withResolvers<void>();
+  const authGate = deferredSignal();
   let authWaiting = false, calls = 0, puts = 0, revoked = false;
   googleAuth.headers.mockImplementation(async () => {
     if (++calls === 3) { authWaiting = true; await authGate.promise; }
