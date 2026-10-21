@@ -101,11 +101,16 @@ try {
   containers.push(databaseContainer);
   await docker('run', '-d', '--name', databaseContainer, '--network', network,
     '-e', 'POSTGRES_PASSWORD=' + password, '-e', 'POSTGRES_DB=science_release_drill', postgresImage);
+  let databaseReady = false;
   for (let i = 0; i < 30; i++) {
-    try { await docker('exec', databaseContainer, 'pg_isready', '-U', 'postgres'); break; } catch { await pause(1000); }
+    // The image briefly starts a Unix-socket-only server while initializing.
+    // Wait for the final TCP listener that both the host and app will use.
+    try { await docker('exec', databaseContainer, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'science_release_drill'); databaseReady = true; break; }
+    catch { await pause(1000); }
   }
+  assert.equal(databaseReady, true, 'synthetic database TCP listener did not become ready');
   const databaseHost = await internalAddress(databaseContainer);
-  database = new Pool({ host: databaseHost, port: 5432, user: 'postgres', password, database: 'science_release_drill', max: 3 });
+  database = new Pool({ host: databaseHost, port: 5432, user: 'postgres', password, database: 'science_release_drill', max: 3, connectionTimeoutMillis: 5000 });
   assert.equal((await database.query("SELECT count(*)::int n FROM information_schema.tables WHERE table_schema='public'")).rows[0].n, 0);
   await database.query(SCHEMA_SQL);
   await runDatabaseMigrations(database, DATABASE_MIGRATIONS.filter(row => row.version <= '0012'));
@@ -136,7 +141,7 @@ try {
   await docker('cp', databaseContainer + ':/tmp/synthetic.dump', dump);
   await docker('exec', databaseContainer, 'createdb', '-U', 'postgres', 'science_release_restore');
   await docker('exec', databaseContainer, 'pg_restore', '-U', 'postgres', '-d', 'science_release_restore', '--exit-on-error', '--no-owner', '/tmp/synthetic.dump');
-  const restored = new Pool({ host: databaseHost, port: 5432, user: 'postgres', password, database: 'science_release_restore', max: 2 });
+  const restored = new Pool({ host: databaseHost, port: 5432, user: 'postgres', password, database: 'science_release_restore', max: 2, connectionTimeoutMillis: 5000 });
   try {
     assert.deepEqual((await restored.query('SELECT version,name,checksum FROM schema_migrations ORDER BY version')).rows, baselineMigrations);
     assert.deepEqual((await restored.query('SELECT id,student_id,activities,observations,reflections FROM experiment_journals ORDER BY id')).rows, original);
