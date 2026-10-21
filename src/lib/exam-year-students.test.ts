@@ -1,3 +1,4 @@
+import { grantTestJournalClasses } from "@/test/journal-permissions";
 import { expect, it } from "vitest";
 import { getDb } from "@/lib/db";
 import { ACADEMIC_YEAR } from "@/lib/constants";
@@ -6,6 +7,7 @@ import type { ExamGenerator } from "@/lib/exam-ai";
 
 async function activity(key: string, club: boolean, year: number, number: number) {
   const db = await getDb();
+  await grantTestJournalClasses(db);
   if (club) await db.query("INSERT INTO clubs(id,academic_year,name,created_by) VALUES($1,$2,'합성 시험 동아리','teacher_bootstrap')", [key, year]);
   else await db.query("INSERT INTO classes(id,academic_year,class_number,name) VALUES($1,$2,$3,'합성 시험 학급')", [key, year, number]);
 }
@@ -20,6 +22,7 @@ it.each(cases)("result club=$club oldStudent=$oldStudent oldTeam=$oldTeam oldExa
   await db.query("INSERT INTO inquiry_sessions(id,team_id) VALUES($1,$1)", [key]);
   await db.query("INSERT INTO team_members(id,team_id,user_id) VALUES($1,$1,$1)", [key]);
   await db.query("INSERT INTO exam_sets(id,class_id,club_id,title,status,common_count,team_count,individual_count,total_score,created_by) VALUES($1,$2,$3,'합성 결과','confirmed',1,0,0,1,'teacher_bootstrap')", [key, club ? null : examScope, club ? examScope : null]);
+  await db.query("UPDATE exam_sets SET student_privacy_reviewed=TRUE WHERE id=$1", [key]);
   await db.query("INSERT INTO exam_questions(id,exam_set_id,scope,sequence,question,competency,max_score,model_answer) VALUES($1,$1,'common',1,'합성 문제','해석',1,'합성 답')", [key]);
   await db.query("INSERT INTO exams(id,exam_set_id,session_id,student_id,status) VALUES($1,$1,$1,$1,'published')", [key]);
   await db.query("INSERT INTO exam_results(id,exam_id,total_score,published_at) VALUES($1,$1,1,CURRENT_TIMESTAMP)", [key]);
@@ -40,6 +43,7 @@ it.each([false, true])("generation excludes historical accounts club=%s", async 
     await db.query("INSERT INTO club_teacher_assignments(club_id,teacher_id,assigned_by) VALUES($1,'teacher_bootstrap','teacher_bootstrap')", [key]);
     await db.query("INSERT INTO club_config_versions(id,club_id,config_type,version_number,title,status,created_by) VALUES($1,$1,'exam',1,'합성 설정','published','teacher_bootstrap')", [key]);
   }
+  await grantTestJournalClasses(db);
   const classId = (await db.query("SELECT id FROM classes WHERE academic_year=$1 AND class_number=6", [ACADEMIC_YEAR])).rows[0].id;
   await db.query("INSERT INTO teams(id,class_id,club_id,team_number,name) VALUES($1,$2,$3,1,'합성 시험팀')", [key, club ? null : classId, club ? key : null]);
   await db.query("INSERT INTO inquiry_sessions(id,team_id) VALUES($1,$1)", [key]);

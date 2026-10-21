@@ -7,7 +7,7 @@ import { getTeacherDashboardData } from "@/lib/teacher-data";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user || user.role !== "teacher" || user.mustChangePassword) return NextResponse.json({ message: "권한이 없습니다." }, { status: 403 });
-  return NextResponse.json(await getTeacherDashboardData());
+  return NextResponse.json(await getTeacherDashboardData(user.id));
 }
 
 export async function POST(request: Request) {

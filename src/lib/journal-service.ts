@@ -1,3 +1,6 @@
+import { assertTeacherJournalAccess } from "@/lib/journal-access";
+import { lockStudentTeams } from "@/lib/team-mutation-locks";
+import { ACADEMIC_YEAR } from "@/lib/constants";
 import type { PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import { audit, getDb } from "@/lib/db";
@@ -26,6 +29,8 @@ export class JournalAccessError extends UserFacingError {
 }
 
 export type JournalPhotoInput = {
+  /** Computed at the trusted upload boundary, never taken from form input. */
+  originalDigest?: string;
   clientId: string;
   contentType: (typeof JOURNAL_ALLOWED_IMAGE_TYPES)[number];
   fileName: string;
@@ -109,17 +114,21 @@ async function assertActiveStudentSession(client: PoolClient, studentId: string,
        JOIN inquiry_cycles c ON c.session_id = s.id AND c.status = 'active'
        JOIN team_members tm ON tm.team_id = s.team_id
        JOIN teams t ON t.id = s.team_id
+       JOIN users u ON u.id = tm.user_id
+       LEFT JOIN classes cls ON cls.id = t.class_id
+       LEFT JOIN clubs cl ON cl.id = t.club_id
        JOIN investigation_plans p ON p.session_id = s.id AND p.cycle_id = c.id
        LEFT JOIN material_requests mr ON mr.session_id = s.id AND mr.cycle_id = c.id
       WHERE s.id = $1
         AND tm.user_id = $2
-        AND tm.status = 'active'
+        AND tm.status = 'active' AND u.status = 'active' AND u.must_change_password = FALSE
+        AND u.academic_year = $3 AND COALESCE(cls.academic_year, cl.academic_year) = $3
         AND t.status = 'active'
         AND p.review_status = 'approved'
         AND (mr.id IS NOT NULL OR t.club_id IS NOT NULL)
         AND s.stage IN ('EXPERIMENTING', 'REPORTING', 'EXAMINING', 'EVALUATING', 'COMPLETED')
       LIMIT 1`,
-    [sessionId, studentId],
+    [sessionId, studentId, ACADEMIC_YEAR],
   );
   if (!result.rows[0]) throw new JournalAccessError("계획 승인과 준비물 신청을 완료한 현재 팀만 실험 일지에 접근할 수 있습니다.", 403);
   return result.rows[0].cycle_id;
@@ -188,13 +197,15 @@ export async function saveStudentJournal(actor: SessionUser, input: SaveJournalI
   try {
     await client.query("BEGIN");
     await client.query("SELECT id FROM inquiry_sessions WHERE id = $1 FOR UPDATE", [input.sessionId]);
+    const target = (await client.query<{ team_id: string }>("SELECT team_id FROM inquiry_sessions WHERE id = $1", [input.sessionId])).rows[0];
+    if (!target) throw new JournalAccessError("탐구 세션을 찾을 수 없습니다.", 404);
+    await lockStudentTeams(client, actor.id, [target.team_id]);
     const cycleId = await assertActiveStudentSession(client, actor.id, input.sessionId);
     if (input.cycleId !== undefined && input.cycleId !== cycleId) {
       throw new JournalAccessError("탐구 회차가 변경되었습니다. 이전 회차의 일지는 새 회차에 저장할 수 없습니다.", 400);
     }
     // Serializes first creation too; the journal row does not exist yet then.
     // PostgreSQL holds this lock until commit across all service instances.
-    await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [actor.id]);
     const found = await client.query<JournalRow>(
       `SELECT id, session_id, cycle_id, student_id, session_number, journal_date, activities, observations,
               reflections, write_version, created_at, updated_at
@@ -216,7 +227,8 @@ export async function saveStudentJournal(actor: SessionUser, input: SaveJournalI
     if (input.existingImageIds.some(id => !byId.has(id))) throw new FormWriteConflict("다른 기기에서 사진 목록을 변경했습니다. 최신 내용과 내 초안을 비교해 주세요.");
     for (const photo of input.photos) {
       const stored = byClientId.get(photo.clientId);
-      if (stored && (stored.content_type !== photo.contentType || stored.file_name !== photo.fileName
+      const legacyRetry = stored && photo.originalDigest === createHash("sha256").update(stored.image_data).digest("hex");
+      if (stored && !legacyRetry && (stored.content_type !== photo.contentType || stored.file_name !== photo.fileName
         || stored.byte_size !== photo.data.length || !stored.image_data.equals(photo.data))) {
         throw new FormWriteConflict("같은 사진 식별자의 내용이 다릅니다. 최신 내용과 내 초안을 비교해 주세요.");
       }
@@ -312,6 +324,7 @@ export async function listTeacherTeamJournals(actor: SessionUser, teamId: string
   const db = await getDb();
   const client = await db.connect();
   try {
+    await assertTeacherJournalAccess(client, actor.id, teamId);
     const sessionResult = await client.query<{ id: string; cycle_id: string }>(`SELECT s.id, c.id AS cycle_id FROM inquiry_sessions s
       JOIN inquiry_cycles c ON c.session_id = s.id WHERE s.team_id = $1 AND ($2::text IS NULL OR c.id = $2)
       ORDER BY CASE WHEN c.status = 'active' THEN 0 ELSE 1 END, c.ordinal DESC LIMIT 1`, [teamId, requestedCycleId ?? null]);
@@ -382,6 +395,10 @@ export async function getJournalImage(
     } finally {
       client.release();
     }
+  } else {
+    const target = (await db.query<{ team_id: string }>("SELECT team_id FROM inquiry_sessions WHERE id = $1", [image.session_id])).rows[0];
+    if (!target) throw new JournalAccessError("사진을 찾을 수 없습니다.", 404);
+    await assertTeacherJournalAccess(db, actor.id, target.team_id);
   }
   return { data: image.image_data, contentType: image.content_type, fileName: image.file_name };
 }

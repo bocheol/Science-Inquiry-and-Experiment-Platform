@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteJournalDraft,
-  getJournalDraft,
   prepareJournalPhoto,
   putJournalDraft,
   type StoredJournalDraft,
@@ -12,6 +11,9 @@ import {
 import type { ExperimentJournal, JournalImage } from "@/lib/types";
 import { useToast } from "@/components/toast-provider";
 import { FormConflict } from "@/components/form-conflict";
+
+import { flushJournalRecoveries, isCurrentJournalDraftDurable, initializeJournalRecovery, listJournalRecoveryDrafts, restoreJournalRecoveryDraft, watchJournalRecovery, type RecoveryCandidate, type RecoveryStatus } from "@/lib/journal-recovery-client";
+import { privateLogoutReady, registerPrivateDraftFlusher } from "@/lib/private-session";
 
 type DraftFields = Pick<StoredJournalDraft, "sessionNumber" | "date" | "activities" | "observations" | "reflections">;
 type PhotoWithPreview = StoredJournalPhoto & { previewUrl: string };
@@ -41,6 +43,11 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [storageNotice, setStorageNotice] = useState("");
+  const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatus | null>(null);
+  const [recoveryChoices, setRecoveryChoices] = useState<RecoveryCandidate[]>([]);
+  const [selectedRecovery, setSelectedRecovery] = useState<string | null>(null);
+  const alive = useRef(true);
   const stateRef = useRef({ fields, existingImages, newPhotos, pendingSync, baseVersion });
   stateRef.current = { fields, existingImages, newPhotos, pendingSync, baseVersion };
   const editVersion = useRef(0);
@@ -78,12 +85,13 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
   }, []);
 
   const loadJournals = useCallback(async () => {
-    const response = await fetch(`/api/inquiry/journals?sessionId=${encodeURIComponent(sessionId)}&cycleId=${encodeURIComponent(cycleId)}`, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
+    const response = await fetch(`/api/inquiry/journals?sessionId=${encodeURIComponent(sessionId)}&cycleId=${encodeURIComponent(cycleId)}`, { cache: "no-store", headers: { "x-expected-user-id": currentUserId }, signal: AbortSignal.timeout(30_000) });
     const result = (await response.json()) as { journals?: ExperimentJournal[]; message?: string };
     if (!response.ok) throw new Error(result.message ?? "실험 일지를 불러오지 못했습니다.");
+    if (!alive.current) return [];
     setJournals(result.journals ?? []);
     return result.journals ?? [];
-  }, [sessionId, cycleId]);
+  }, [sessionId, cycleId, currentUserId]);
 
   const sendDraft = useCallback(async (draft: StoredJournalDraft) => {
     const formData = new FormData();
@@ -98,7 +106,7 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
     formData.set("existingImageIds", JSON.stringify(draft.existingImages.map((image) => image.id)));
     formData.set("photoClientIds", JSON.stringify(draft.newPhotos.map((photo) => photo.clientId)));
     for (const photo of draft.newPhotos) formData.append("photos", new File([photo.blob], photo.fileName, { type: photo.contentType }));
-    const response = await fetch("/api/inquiry/journals", { method: "POST", body: formData, signal: AbortSignal.timeout(30_000) }).catch(() => {
+    const response = await fetch("/api/inquiry/journals", { method: "POST", body: formData, headers: { "x-expected-user-id": currentUserId }, signal: AbortSignal.timeout(30_000) }).catch(() => {
       throw Object.assign(new Error("연결이 불안정해 일지를 전송하지 못했습니다."), { retriable: true });
     });
     const result = (await response.json()) as { journal?: ExperimentJournal; message?: string };
@@ -109,13 +117,14 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
       throw failure;
     }
     return result.journal;
-  }, []);
+  }, [cycleId, currentUserId]);
 
   const finishSync = useCallback(async (journal: ExperimentJournal, version: number) => {
+    if (!alive.current) return;
     setError("");
     setJournals((current) => [journal, ...current.filter((item) => item.id !== journal.id)]
       .sort((left, right) => right.sessionNumber - left.sessionNumber));
-    if (editVersion.current === version) await removeDraft();
+    if (editVersion.current === version) await removeDraft().catch(() => setStorageNotice("일지는 서버에 저장했습니다. 복구 사본 정리는 연결 후 다시 확인합니다."));
     // Recheck after the asynchronous delete too: typing may continue meanwhile.
     if (editVersion.current !== version) {
       if (stateRef.current.fields.sessionNumber === journal.sessionNumber) {
@@ -124,7 +133,7 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
       }
       setPendingSync(false);
       setDirty(true);
-      await persistDraft(makeStoredDraft(false));
+      await persistDraft(makeStoredDraft(false)).catch(() => setStorageNotice("추가 작성분의 기기 복구 저장에 실패했습니다. 서버 저장 버튼으로 보관해 주세요."));
       setNotice("앞선 내용은 저장했습니다. 그 뒤 작성한 내용은 보존했으니 다시 저장해 주세요.");
       return;
     }
@@ -147,14 +156,25 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
 
   useEffect(() => {
     let cancelled = false;
+    alive.current = true;
+    initializeJournalRecovery(draftKey, { ownerId: currentUserId, sessionId, cycleId });
+    const stopWatching = watchJournalRecovery(draftKey, status => {
+      setRecoveryStatus(status);
+      if (status.retryAsNew && lifecycle.current.dirty) void persistDraft(makeStoredDraft(stateRef.current.pendingSync)).catch(() => setStorageNotice("새 복구 사본의 기기 저장에 실패했습니다."));
+    });
     void (async () => {
       try {
-        const [serverResult, draftResult] = await Promise.allSettled([loadJournals(), getJournalDraft(draftKey)]);
+        const [serverResult, draftResult] = await Promise.allSettled([loadJournals(), listJournalRecoveryDrafts(draftKey)]);
         if (cancelled) return;
         const serverJournals = serverResult.status === "fulfilled" ? serverResult.value : [];
-        const draft = draftResult.status === "fulfilled" ? draftResult.value : null;
+        const choices = draftResult.status === "fulfilled" ? draftResult.value : [];
+        if (choices.length > 1 && !selectedRecovery) { setRecoveryChoices(choices); return; }
+        const candidate = selectedRecovery ? choices.find(item => item.id === selectedRecovery) : choices[0];
+        const draft = candidate ? await restoreJournalRecoveryDraft(draftKey, candidate.id) : null;
+        if (cancelled) return;
+        setRecoveryChoices([]);
         if (serverResult.status === "rejected") setError("서버 일지를 불러오지 못했습니다. 기기에 남은 초안을 먼저 확인해 주세요.");
-        if (draftResult.status === "rejected") setError("기기 임시 저장소를 열지 못했습니다. 작성 내용은 별도로 복사해 보관해 주세요.");
+        if (draftResult.status === "rejected") setStorageNotice("복구 사본을 읽지 못했습니다. 연결 상태를 확인해 주세요. 서버 임시 저장은 계속 사용할 수 있습니다.");
         if (draft) {
           const server = serverJournals.find(journal => journal.sessionNumber === draft.sessionNumber) ?? null;
           const latestVersion = server?.version ?? null;
@@ -180,7 +200,7 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
             setDirty(false);
             setPendingSync(false);
             setNotice("이전에 응답을 받지 못한 일지가 서버에 저장된 것을 확인했습니다.");
-            void removeDraft();
+            void removeDraft().catch(() => setStorageNotice("서버 저장을 확인했습니다. 복구 사본 정리는 연결 후 다시 확인합니다."));
           } else {
             if (serverResult.status === "fulfilled"
               && (draft.baseVersion === undefined ? Boolean(server) : draft.baseVersion !== latestVersion)) setConflictServer(server);
@@ -195,13 +215,21 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
         if (!cancelled) setReady(true);
       }
     })();
-    return () => { cancelled = true; };
-  }, [draftKey, loadJournals, removeDraft, revokePhotos]);
+    return () => { cancelled = true; alive.current = false; stopWatching(); };
+  }, [draftKey, currentUserId, sessionId, cycleId, selectedRecovery, loadJournals, removeDraft, revokePhotos, persistDraft, makeStoredDraft]);
+
+  useEffect(() => registerPrivateDraftFlusher(async () => {
+    if (lifecycle.current.ready && lifecycle.current.dirty) {
+      try { await persistDraft(makeStoredDraft(stateRef.current.pendingSync)); }
+      catch (error) { await flushJournalRecoveries(); if (!isCurrentJournalDraftDurable(draftKey)) throw error; }
+    }
+  }), [draftKey, makeStoredDraft, persistDraft]);
+  useEffect(() => () => revokePhotos(stateRef.current.newPhotos), [revokePhotos]);
 
   useEffect(() => {
     if (!ready || !dirty) return;
     const timer = window.setTimeout(() => {
-      void persistDraft(makeStoredDraft(pendingSync)).catch(() => setError("기기 임시 저장에 실패했습니다."));
+      void persistDraft(makeStoredDraft(pendingSync)).catch(() => setStorageNotice("기기 복구 저장에 실패했습니다. 온라인이라면 서버 복구 전송을 시도합니다. 상태를 확인하고 임시 저장을 눌러 주세요."));
     }, 450);
     return () => window.clearTimeout(timer);
   }, [dirty, fields, existingImages, makeStoredDraft, newPhotos, pendingSync, persistDraft, ready]);
@@ -218,11 +246,11 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
         const current = stateRef.current;
         const server = latest.find(journal => journal.sessionNumber === current.fields.sessionNumber) ?? null;
         if (current.baseVersion === undefined || current.baseVersion !== (server?.version ?? null)) setConflictServer(server);
-      }).catch(() => setNotice("최신 저장 내용을 확인하지 못했습니다. 작성 내용은 기기에 유지됩니다."));
+      }).catch(() => setNotice("최신 저장 내용을 확인하지 못했습니다. 작성 화면을 유지하며 복구 저장 상태를 확인해 주세요."));
     };
     const onVisibility = () => { if (document.visibilityState === "hidden") flush(); else checkLatest(); };
     const onUnload = (event: BeforeUnloadEvent) => {
-      if (lifecycle.current.dirty) { flush(); event.preventDefault(); event.returnValue = ""; }
+      if (lifecycle.current.dirty && !privateLogoutReady()) { flush(); event.preventDefault(); event.returnValue = ""; }
     };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", flush);
@@ -305,10 +333,14 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
     if (existingImages.length + newPhotos.length + files.length > 5) return setError("사진은 차시당 5장까지 첨부할 수 있습니다.");
     setBusy(true); setError("");
     try {
-      const prepared = await Promise.all(files.map(prepareJournalPhoto));
+      const results = await Promise.allSettled(files.map(prepareJournalPhoto));
+      if (!alive.current) return;
+      const prepared = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+      const failed = results.flatMap((result, index) => result.status === "rejected" ? [`${files[index]!.name}: ${result.reason instanceof Error ? result.reason.message : "처리 실패"}`] : []);
       editVersion.current += 1;
       setNewPhotos((current) => [...current, ...prepared.map((photo) => ({ ...photo, previewUrl: URL.createObjectURL(photo.blob) }))]);
-      setDirty(true);
+      if (prepared.length) setDirty(true);
+      if (failed.length) setError(`선택하지 못한 사진은 다시 시도해 주세요. ${failed.join(" / ")}`);
     } catch (photoError) {
       setError(photoError instanceof Error ? photoError.message : "사진을 처리하지 못했습니다.");
     } finally {
@@ -351,7 +383,7 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
     if (!ready || busy || sending.current) return;
     setError(""); setNotice("");
     if (conflictServer !== undefined || baseVersion === undefined) return setError("최신 저장 내용과 내 초안을 먼저 비교해 주세요.");
-    if (!fields.activities.trim() || !fields.observations.trim()) return setError("오늘 한 일과 관찰 결과를 모두 적어 주세요.");
+    if (![fields.activities, fields.observations, fields.reflections].some(value => value.trim()) && !existingImages.length && !newPhotos.length) return setError("글 한 항목이나 사진을 추가해 주세요.");
     const queued = makeStoredDraft(true);
     const version = editVersion.current;
     sending.current = true;
@@ -359,8 +391,13 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
     setDirty(true);
     setBusy(true);
     try {
-      await persistDraft(queued);
-      if (!online) return setNotice("작성 내용과 사진은 이 기기에 보관했습니다. 연결이 돌아오면 임시 저장을 다시 눌러 주세요.");
+      let localSaved = false;
+      await persistDraft(queued).then(() => { localSaved = true; }, () => setStorageNotice("기기 복구 저장에 실패했습니다. 서버 저장을 계속 시도합니다."));
+      if (!online) {
+        if (localSaved) setNotice("작성 내용과 사진을 기기에 암호화해 보관했습니다. 연결 후 복구 사본을 전송합니다.");
+        else setError("오프라인이며 기기 저장에도 실패했습니다. 이 화면을 닫지 말고 연결이나 저장 공간을 확인해 주세요.");
+        return;
+      }
       await finishSync(await sendDraft(queued), version);
     } catch (saveError) {
       const typed = saveError as Error & { retriable?: boolean; status?: number };
@@ -378,23 +415,25 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
           failureMessage = "다른 기기의 저장과 충돌했고 최신 내용을 아직 불러오지 못했습니다. 작성 내용은 유지됩니다. 페이지로 돌아오면 다시 확인합니다.";
         }
       }
-      await persistDraft(makeStoredDraft(Boolean(typed.retriable))).catch(() => setNotice("기기 임시 저장에도 실패했습니다. 화면의 글을 복사해 보관해 주세요."));
+      const locallySaved = await persistDraft(makeStoredDraft(Boolean(typed.retriable))).then(() => true, () => false);
       setError(failureMessage);
       showToast(failureMessage, "error");
-      if (typed.retriable) setNotice("작성 내용은 기기에 보관됩니다. 연결이 복구되면 임시 저장을 다시 눌러 주세요.");
+      if (!locallySaved) setNotice("기기 임시 저장에도 실패했습니다. 화면을 닫지 말고 글을 복사해 보관해 주세요.");
+      else if (typed.retriable) setNotice("작성 내용은 기기에 암호화해 보관했습니다. 연결이 복구되면 임시 저장을 다시 눌러 주세요.");
     } finally {
       sending.current = false;
       setBusy(false);
     }
   }
 
+  if (recoveryChoices.length) return <section className="card stack"><h2>복구할 작성 내용 선택</h2><p>서로 다른 탭이나 기기의 사본이 있습니다. 하나를 선택해 확인하세요. 다른 사본은 보존됩니다.</p>{recoveryChoices.map(item => <button className="button secondary" key={item.id} onClick={() => setSelectedRecovery(item.id)}>{new Date(item.savedAt).toLocaleString("ko-KR")} · {item.local ? "이 기기" : "서버"} 사본</button>)}</section>;
   if (!ready) return <div className="empty-state">실험 일지와 기기 초안을 불러오는 중…</div>;
 
   return (
     <section className="journal-layout">
       <div className="journal-editor">
         <div className="page-title journal-title">
-          <div><h1>개인 실험 일지</h1><p>작성 중인 글과 사진은 기기에 복구용으로 보관됩니다. 임시 저장을 눌러야 서버에 저장되며 본인과 선생님만 볼 수 있습니다.</p></div>
+          <div><h1>개인 실험 일지</h1><p>작성 중인 글과 사진은 본인만 열 수 있는 복구 사본으로 자동 보관합니다. 임시 저장을 누르면 담당 선생님도 볼 수 있는 일지에 반영됩니다.</p></div>
           <button className="button ghost" type="button" onClick={startNew}>+ 새 차시</button>
         </div>
         {conflictServer !== undefined ? <FormConflict rows={[
@@ -404,7 +443,9 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
           { label: "느낀 점 / 궁금한 점", mine: fields.reflections, server: conflictServer?.reflections ?? "" },
           { label: "사진", mine: `${existingImages.length + newPhotos.length}장`, server: `${conflictServer?.images.length ?? 0}장` },
         ]} onResolve={resolveConflict} /> : null}
-        {!online || pendingSync ? <div className="warning-box">{online ? "서버에 저장되지 않은 내용이 있습니다. 임시 저장을 눌러 주세요." : "오프라인 상태입니다. 작성 내용은 기기에 보관되며 연결 후 임시 저장을 눌러야 서버에 반영됩니다."}</div> : null}
+        {!online || pendingSync ? <div className="warning-box">{online ? "서버 일지에 저장되지 않은 내용이 있습니다. 임시 저장을 눌러 주세요." : "오프라인 상태입니다. 아래 복구 저장 상태를 확인하세요. 연결 후 임시 저장을 누르면 선생님이 볼 일지에 반영됩니다."}</div> : null}
+        {storageNotice ? <div className="warning-box" role="alert">{storageNotice}</div> : null}
+        {dirty && recoveryStatus ? <p className="save-state" role="status">기기 복구: {recoveryStatus.local === "saved" ? "암호화 저장됨" : recoveryStatus.local === "failed" ? "저장 실패" : "저장 중"} · 본인 전용 서버 복구: {recoveryStatus.server === "saved" ? "저장됨" : recoveryStatus.server === "failed" ? "전송 실패" : "전송 대기"}{recoveryStatus.message ? ` · ${recoveryStatus.message}` : ""}</p> : null}
         {error ? <div className="error-box" role="alert">{error}</div> : null}
         {notice ? <div className="notice-box">{notice}</div> : null}
         <div className="journal-meta-grid">
@@ -417,7 +458,7 @@ export function JournalPanel({ sessionId, cycleId, currentUserId }: { sessionId:
         <div className="field">
           <div className="field-heading"><label htmlFor="journal-photos">실험 사진 (선택)</label><span className="save-state">{existingImages.length + newPhotos.length}/5장</span></div>
           <input id="journal-photos" className="input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple onChange={addPhotos} disabled={busy || existingImages.length + newPhotos.length >= 5} />
-          <p className="section-subtitle" style={{ margin: 0 }}>큰 사진은 태블릿에서 자동으로 줄여 저장합니다.</p>
+          <p className="section-subtitle" style={{ margin: 0 }}>사진은 크기를 줄이고 촬영 위치 등 메타데이터를 제거해 저장합니다.</p>
         </div>
         <div className="journal-photo-grid">
           {existingImages.map((image) => <figure className="journal-photo" key={image.id}><img src={image.url} alt="저장된 실험 사진" /><button type="button" onClick={() => { editVersion.current += 1; setExistingImages((current) => current.filter((item) => item.id !== image.id)); setDirty(true); }}>사진 제거</button></figure>)}

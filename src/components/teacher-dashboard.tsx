@@ -85,6 +85,7 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
   );
   const progressSummary = useMemo(() => ({
     members: progressScopeTeams.reduce((sum, team) => sum + team.memberCount, 0),
+    journalMembers: progressScopeTeams.filter(team => team.canReadJournals !== false).reduce((sum, team) => sum + team.memberCount, 0),
     journalStudents: progressScopeTeams.reduce((sum, team) => sum + team.journalStudentCount, 0),
     approvedPlans: progressScopeTeams.filter((team) => team.planStatus === "approved").length,
     submittedReports: progressScopeTeams.filter((team) => team.reportStatus === "submitted" || team.reportStatus === "reviewed").length,
@@ -244,7 +245,7 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
           <div className="grid progress-metrics">
             <article className="metric"><span>팀</span><strong>{progressScopeTeams.length}</strong></article>
             <article className="metric"><span>계획 승인</span><strong>{progressSummary.approvedPlans}<small>/{progressScopeTeams.length}</small></strong></article>
-            <article className="metric"><span>일지 작성 학생</span><strong>{progressSummary.journalStudents}<small>/{progressSummary.members}</small></strong></article>
+            <article className="metric"><span>담당·공동관리 반 일지 작성 학생</span><strong>{progressSummary.journalStudents}<small>/{progressSummary.journalMembers}</small></strong></article>
             <article className="metric"><span>보고서 제출</span><strong>{progressSummary.submittedReports}<small>/{progressScopeTeams.length}</small></strong></article>
             <article className="metric attention-metric"><span>교사 확인 필요</span><strong>{progressSummary.teacherAttention}</strong></article>
           </div>
@@ -262,7 +263,7 @@ export function TeacherDashboard({ initialData }: { initialData: TeacherDashboar
                   <td>{team.topic || "주제 탐색 중"}</td>
                   <td>질문 {team.messageCount}회</td>
                   <td><span className={`badge ${team.planStatus ?? ""}`}>{statusLabel(team.planStatus)}</span></td>
-                  <td><b>{team.journalStudentCount}/{team.memberCount}명</b><br /><small>총 {team.journalEntryCount}차시</small></td>
+                  <td>{team.canReadJournals === false ? "열람 권한 없음" : <><b>{team.journalStudentCount}/{team.memberCount}명</b><br /><small>총 {team.journalEntryCount}차시</small></>}</td>
                   <td><span className={`badge ${team.reportStatus === "feedback" ? "feedback" : team.reportStatus === "submitted" ? "pending" : ""}`}>{reportStatusLabel(team.reportStatus)}</span></td>
                   <td>{team.attentionReasons.length ? <span className={`badge ${team.attention === "teacher" ? "pending" : "feedback"}`}>{team.attentionReasons.join(" · ")}</span> : <span className="badge">없음</span>}</td>
                   <td>{recentLabel(team.lastActivityAt)}</td>

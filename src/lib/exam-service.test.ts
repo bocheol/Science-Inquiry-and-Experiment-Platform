@@ -1,3 +1,4 @@
+import { grantTestJournalClasses } from "@/test/journal-permissions";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -12,6 +13,7 @@ import {
   getExamSetForPdf,
   getPublishedStudentExamResult,
   publishExamResult,
+  reviewConfirmedExamPrivacy,
   questionsForPaper,
   saveExamResult,
 } from "@/lib/exam-service";
@@ -25,7 +27,7 @@ const reportId = "exam_test_report";
 const activeIds = ["exam_test_student_1", "exam_test_student_2"];
 const privateValues = ["홍비밀", "백보안", "윤퇴실", "10801", "10802", "10803"];
 let examSetId = "";
-let capturedTeam: TeamExamSource | null = null;
+const capturedTeams: TeamExamSource[] = [];
 let capturedCommon = "";
 
 function question(label: string, sourceKeys: string[] = []): GeneratedExamQuestion {
@@ -42,7 +44,7 @@ const fakeGenerator: ExamGenerator = {
     return Array.from({ length: input.count }, (_, index) => question(`공통 ${index + 1}`));
   },
   async generateTeam(input) {
-    capturedTeam = input.team;
+    capturedTeams.push(input.team);
     return {
       teamQuestions: Array.from({ length: input.teamCount }, (_, index) => question(`팀 ${index + 1}`, input.team.sources.filter(source => source.key.endsWith(".method") || source.key.endsWith(".analysis")).map(source => source.key))),
       individualQuestions: input.team.students.map((student) => ({
@@ -55,6 +57,7 @@ const fakeGenerator: ExamGenerator = {
 
 beforeAll(async () => {
   const db = await getDb();
+  await grantTestJournalClasses(db);
   await db.query(
     `INSERT INTO users (id, name, login_id, academic_year, role, class_id, password_hash, must_change_password)
      VALUES ($1, '홍비밀', '10801', 2026, 'student', $4, 'unused', FALSE),
@@ -111,7 +114,7 @@ describe("fair, source-grounded exam workflow", () => {
     const recoveredId = await generateExamSet("teacher_bootstrap", input, recoveringGenerator, requestId);
     expect(await generateExamSet("teacher_bootstrap", input, recoveringGenerator, requestId)).toBe(recoveredId);
     expect(common).toHaveBeenCalledTimes(1);
-    expect(team).toHaveBeenCalledTimes(2);
+    expect(team).toHaveBeenCalledTimes(4);
     expect((await getExamManagementData(classNumber, recoveredId)).selected?.questions).toHaveLength(4);
   });
 
@@ -121,16 +124,23 @@ describe("fair, source-grounded exam workflow", () => {
       totalScore: 40, commonScope: "자료 해석과 오차 분석",
     }, fakeGenerator);
 
-    const sent = `${capturedCommon}${JSON.stringify(capturedTeam)}`;
+    const sent = `${capturedCommon}${JSON.stringify(capturedTeams)}`;
     for (const value of privateValues) expect(sent).not.toContain(value);
     expect(sent).not.toContain("퇴실 학생의 비공개 관찰");
     expect(sent).not.toContain("제거 학생의 과거 역할");
     const preservedRole = await (await getDb()).query("SELECT role_description FROM report_member_roles WHERE report_id = $1 AND user_id = 'exam_test_inactive'", [reportId]);
     expect(preservedRole.rows[0].role_description).toBe("제거 학생의 과거 역할");
-    expect(capturedTeam!.sources.every((source) => !source.key.startsWith("journal."))).toBe(true);
-    expect(capturedTeam!.students).toHaveLength(2);
-    expect(capturedTeam!.students[0]!.sources.map((source) => source.text).join(" ")).toContain("1번 학생만의 관찰");
-    expect(capturedTeam!.students[0]!.sources.map((source) => source.text).join(" ")).not.toContain("2번 학생만의 관찰");
+    const publicInput = capturedTeams.find(team => team.students.length === 0)!;
+    expect(publicInput.sources.every(source => !source.key.startsWith("journal."))).toBe(true);
+    expect(JSON.stringify(publicInput)).not.toContain("학생만의 관찰");
+    const personalInputs = capturedTeams.filter(team => team.students.length > 0);
+    expect(personalInputs).toHaveLength(2);
+    for (const [index, team] of personalInputs.entries()) {
+      expect(team.students).toHaveLength(1);
+      expect(team.sources).toEqual([]);
+      expect(JSON.stringify(team)).toContain(`${index + 1}번 학생만의 관찰`);
+      expect(JSON.stringify(team)).not.toContain(`${2 - index}번 학생만의 관찰`);
+    }
 
     const data = (await getExamManagementData(classNumber, examSetId)).selected!;
     expect(data.papers).toHaveLength(2);
@@ -170,10 +180,10 @@ describe("fair, source-grounded exam workflow", () => {
     const snapshots = (await db.query("SELECT * FROM plan_document_snapshots WHERE plan_id = 'exam_test_plan' ORDER BY id")).rows;
     const generator: ExamGenerator = {
       async generateCommon() { return []; },
-      async generateTeam({ team }) {
+      async generateTeam({ team, teamCount }) {
         const teamSources = team.sources.filter(source => source.key.endsWith(".method") || source.key.endsWith(".analysis"));
-        expect(teamSources).toHaveLength(2);
-        expected.set("team", structuredClone(teamSources));
+        expect(teamSources).toHaveLength(teamCount ? 2 : 0);
+        if (teamCount) expected.set("team", structuredClone(teamSources));
         for (const student of team.students) {
           const sources = student.sources.filter(source => source.key.startsWith("role.") || source.key.endsWith(".observations"));
           expect(sources).toHaveLength(2);
@@ -185,7 +195,7 @@ describe("fair, source-grounded exam workflow", () => {
         await db.query("UPDATE report_member_roles SET role_description = '생성 도중 바뀐 역할' WHERE report_id = $1", [reportId]);
         await db.query("UPDATE experiment_journals SET observations = '생성 도중 바뀐 관찰' WHERE session_id = $1", [sessionId]);
         return {
-          teamQuestions: [question("생성 중 고정 팀 근거", teamSources.map(source => source.key))],
+          teamQuestions: teamCount ? [question("생성 중 고정 팀 근거", teamSources.map(source => source.key))] : [],
           individualQuestions: team.students.map(student => ({ studentRef: student.studentRef, questions: [question(student.studentRef, expected.get(student.studentRef)!.map(source => source.key))] })),
         };
       },
@@ -232,6 +242,18 @@ describe("fair, source-grounded exam workflow", () => {
     expect(await getPublishedStudentExamResult(activeIds[0])).toMatchObject({ totalScore: 40, maxScore: 40 });
     expect(await getPublishedStudentExamResult(activeIds[1])).toBeNull();
     expect(await getPublishedStudentExamResult("exam_test_inactive")).toBeNull();
+  });
+
+  it("withholds legacy student results until an authorized teacher reviews privacy without changing grades", async () => {
+    const db = await getDb();
+    const before = (await db.query("SELECT e.id,e.status,r.question_scores,r.total_score,r.published_at FROM exams e JOIN exam_results r ON r.exam_id=e.id WHERE e.exam_set_id=$1 ORDER BY e.id", [examSetId])).rows;
+    await db.query("UPDATE exam_sets SET student_privacy_reviewed=FALSE WHERE id=$1", [examSetId]);
+    expect(await getPublishedStudentExamResult(activeIds[0])).toBeNull();
+    await expect(reviewConfirmedExamPrivacy(activeIds[0]!, examSetId)).rejects.toMatchObject({ status: 403 });
+    expect(await getPublishedStudentExamResult(activeIds[0])).toBeNull();
+    await reviewConfirmedExamPrivacy("teacher_bootstrap", examSetId);
+    expect(await getPublishedStudentExamResult(activeIds[0])).toMatchObject({ totalScore: 40 });
+    expect((await db.query("SELECT e.id,e.status,r.question_scores,r.total_score,r.published_at FROM exams e JOIN exam_results r ON r.exam_id=e.id WHERE e.exam_set_id=$1 ORDER BY e.id", [examSetId])).rows).toEqual(before);
   });
 
   it("creates an editable correction copy while preserving the confirmed original and results", async () => {

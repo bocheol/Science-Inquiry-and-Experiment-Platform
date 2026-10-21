@@ -1,3 +1,5 @@
+import { TEAM_PUBLIC_EVIDENCE_POLICY } from "@/lib/journal-privacy-policy";
+import { canReadTeamJournals } from "@/lib/journal-access";
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { z } from "zod";
@@ -15,8 +17,8 @@ import { lockStudentsTeams } from "@/lib/team-mutation-locks";
 import { UserFacingError } from "@/lib/user-facing-error";
 
 export const CYCLE_ANALYSIS_SCHEMA_VERSION = "cycle-analysis-result-v2";
-export const INTERMEDIATE_ANALYSIS_PROMPT_VERSION = "cycle-intermediate-analysis-v3";
-export const FINAL_ANALYSIS_PROMPT_VERSION = "cycle-final-analysis-v3";
+export const INTERMEDIATE_ANALYSIS_PROMPT_VERSION = "cycle-intermediate-analysis-v4";
+export const FINAL_ANALYSIS_PROMPT_VERSION = "cycle-final-analysis-v4";
 
 export type CycleAnalysisType = "intermediate" | "final";
 
@@ -171,10 +173,6 @@ function sourceCatalog(snapshot: CycleEvidenceSnapshot) {
     label: `준비물 신청 ${index + 1}`,
     value: { items: request.items, totalAmount: request.totalAmount, syncStatus: request.syncStatus, submittedAt: request.submittedAt },
   }));
-  snapshot.journals.forEach((journal) => sources.push({
-    id: journal.evidenceId, kind: "journal", label: `${journal.sessionNumber}차시 관찰 기록`,
-    value: { date: journal.date, activities: journal.activities, observations: journal.observations },
-  }));
   snapshot.messages.forEach((message) => sources.push({
     id: message.evidenceId, kind: "ai_conversation", label: message.role === "assistant" ? "AI 답변" : "학생 질문", value: message.content,
   }));
@@ -187,7 +185,7 @@ function sourceCatalog(snapshot: CycleEvidenceSnapshot) {
     value: { content: entry.content, parentEvidenceId: entry.parentEvidenceId, recordedParticipants: entry.participantIds.length, contentConfirmations: entry.confirmedBy.length,
       attribution: "작성된 기록이며 실제 수행·참석·합의·개인 역량을 관찰한 증거가 아닙니다." },
   }));
-  snapshot.trajectoryContext.forEach((prior) => {
+  (snapshot.privacyPolicy === TEAM_PUBLIC_EVIDENCE_POLICY ? snapshot.trajectoryContext : []).forEach((prior) => {
     sources.push({ id: `prior-analysis:${prior.analysisId}`, kind: "prior_analysis", label: `${prior.title} AI 분석`, value: prior.result });
     prior.decisions.forEach((decision) => sources.push({
       id: `prior-decision:${prior.analysisId}:${decision.suggestionId}`,
@@ -326,13 +324,15 @@ async function decisionsForAnalysis(analysisId: string) {
   }));
 }
 
-export async function getCycleJourney(sessionId: string): Promise<CycleJourneyItem[]> {
+export async function getCycleJourney(sessionId: string, teacherId?: string): Promise<CycleJourneyItem[]> {
   const db = await getDb();
   const cycles = await db.query<{
     id: string; ordinal: number; title: string; status: CycleJourneyItem["status"];
     origin: CycleJourneyItem["origin"]; started_at: Date | string | null; ended_at: Date | string | null;
   }>(`SELECT id, ordinal, title, status, origin, started_at, ended_at
         FROM inquiry_cycles WHERE session_id = $1 ORDER BY ordinal`, [sessionId]);
+  const target = teacherId ? (await db.query<{ team_id: string }>("SELECT team_id FROM inquiry_sessions WHERE id = $1", [sessionId])).rows[0] : null;
+  const includePrivate = Boolean(teacherId && target && await canReadTeamJournals(db, teacherId, target.team_id));
   const analyses = await db.query<{
     id: string; cycle_id: string; snapshot_id: string; content_hash: string; analysis_type: CycleAnalysisType;
     model: string; prompt_version: string; schema_version: string; result_json: CycleAnalysisResult | string; created_at: Date | string;
@@ -347,7 +347,7 @@ export async function getCycleJourney(sessionId: string): Promise<CycleJourneyIt
         JOIN cycle_evidence_snapshots s ON s.id = a.snapshot_id
         JOIN plan_document_snapshots ps ON ps.id = s.plan_snapshot_id
         JOIN inquiry_cycles c ON c.id = a.cycle_id
-       WHERE c.session_id = $1 ORDER BY c.ordinal, a.created_at DESC`, [sessionId]);
+       WHERE c.session_id = $1 AND ($2 = TRUE OR a.privacy_policy = $3) ORDER BY c.ordinal, a.created_at DESC`, [sessionId, includePrivate, TEAM_PUBLIC_EVIDENCE_POLICY]);
   const latestByCycle = new Map<string, typeof analyses.rows[number]>();
   for (const analysis of analyses.rows) {
     const current = latestByCycle.get(analysis.cycle_id);
@@ -481,11 +481,11 @@ export async function requestCycleAnalysis(
       if (!(await ownsAiJob(writer, job.jobId, job.leaseToken))) throw new UserFacingError("AI 분석 작업 소유권이 만료되었습니다. 다시 시도해 주세요.");
       await writer.query(
         `INSERT INTO cycle_ai_analyses
-          (id, cycle_id, snapshot_id, analysis_type, requested_by, ai_job_id, model, prompt_version, schema_version, result_json)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          (id, cycle_id, snapshot_id, analysis_type, requested_by, ai_job_id, model, prompt_version, schema_version, result_json, privacy_policy)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (snapshot_id, analysis_type, prompt_version, schema_version) DO NOTHING`,
         [createId("cycle_analysis"), cycleId, snapshot!.id, type, teacherId, job.jobId, generated.model,
-          promptVersion(type), CYCLE_ANALYSIS_SCHEMA_VERSION, JSON.stringify(result)],
+          promptVersion(type), CYCLE_ANALYSIS_SCHEMA_VERSION, JSON.stringify(result), TEAM_PUBLIC_EVIDENCE_POLICY],
       );
       if (!(await completeAiJob(writer, job.jobId, job.leaseToken, result))) throw new UserFacingError("AI 분석 결과를 저장하지 못했습니다.");
       await writer.query("COMMIT");
@@ -536,7 +536,7 @@ export async function saveCycleDecision(input: {
           JOIN teams t ON t.id = s.team_id
           JOIN users u ON u.id = tm.user_id
          WHERE a.id = $1 AND tm.user_id = $2 AND tm.status = 'active'
-           AND t.status = 'active' AND u.status = 'active'`, [input.analysisId, input.studentId]);
+           AND t.status = 'active' AND u.status = 'active' AND a.privacy_policy = $3`, [input.analysisId, input.studentId, TEAM_PUBLIC_EVIDENCE_POLICY]);
     const row = access.rows[0];
     if (!row) throw new UserFacingError("이 회차 분석에 응답할 권한이 없습니다.");
     if (row.cycle_status !== "active" || row.analysis_type !== "intermediate") {

@@ -1,3 +1,4 @@
+import { TEAM_PUBLIC_EVIDENCE_POLICY } from "@/lib/journal-privacy-policy";
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { defaultClubConfigDefinition } from "@/lib/club-settings";
@@ -9,6 +10,7 @@ import { PRACTICE_MATERIAL_SQL } from "@/lib/material-practice";
 type Queryable = Pick<Pool | PoolClient, "query">;
 
 export type CycleEvidencePayload = {
+  privacyPolicy?: string;
   cycle: {
     id: string;
     sessionId: string;
@@ -146,11 +148,6 @@ export async function buildCycleEvidencePayload(db: Queryable, cycleId: string, 
     id: string; form_data: unknown[] | string; total_amount: number; sync_status: string; submitted_at: Date | string; is_practice: boolean;
   }>(`SELECT m.id, m.form_data, m.total_amount, m.sync_status, m.submitted_at, ${PRACTICE_MATERIAL_SQL} AS is_practice
         FROM material_requests m LEFT JOIN users u ON u.id = m.submitted_by WHERE m.cycle_id = $1 ORDER BY m.submitted_at, m.id`, [cycleId]);
-  const journalRows = await db.query<{
-    id: string; session_number: number; journal_date: Date | string; activities: string;
-    observations: string; updated_at: Date | string;
-  }>(`SELECT id, session_number, journal_date, activities, observations, updated_at
-        FROM experiment_journals WHERE cycle_id = $1 ORDER BY journal_date, session_number, id`, [cycleId]);
   const messageRows = await db.query<{
     id: string; role: string; content: string; created_at: Date | string;
   }>(`SELECT id, role, content, created_at FROM messages
@@ -207,8 +204,8 @@ export async function buildCycleEvidencePayload(db: Queryable, cycleId: string, 
   }>(`SELECT c.id AS cycle_id, c.ordinal, c.title, a.id AS analysis_id, a.analysis_type, a.result_json
         FROM inquiry_cycles c
         JOIN cycle_ai_analyses a ON a.cycle_id = c.id
-       WHERE c.session_id = $1 AND (c.ordinal < $2 OR ($3 = TRUE AND c.ordinal = $2 AND a.analysis_type = 'intermediate'))
-       ORDER BY c.ordinal, a.created_at DESC, a.id`, [cycle.session_id, cycle.ordinal, includeCurrentIntermediate]);
+       WHERE c.session_id = $1 AND (c.ordinal < $2 OR ($3 = TRUE AND c.ordinal = $2 AND a.analysis_type = 'intermediate')) AND a.privacy_policy = $4
+       ORDER BY c.ordinal, a.created_at DESC, a.id`, [cycle.session_id, cycle.ordinal, includeCurrentIntermediate, TEAM_PUBLIC_EVIDENCE_POLICY]);
   const seenCycles = new Set<string>();
   const trajectoryContext: CycleEvidencePayload["trajectoryContext"] = [];
   for (const prior of priorAnalysisRows.rows) {
@@ -234,6 +231,7 @@ export async function buildCycleEvidencePayload(db: Queryable, cycleId: string, 
   }
 
   return {
+    privacyPolicy: TEAM_PUBLIC_EVIDENCE_POLICY,
     cycle: {
       id: cycle.id,
       sessionId: cycle.session_id,
@@ -273,14 +271,7 @@ export async function buildCycleEvidencePayload(db: Queryable, cycleId: string, 
       isPractice: item.is_practice,
       submittedAt: new Date(item.submitted_at).toISOString(),
     })),
-    journals: journalRows.rows.map((item) => ({
-      evidenceId: `journal:${item.id}`,
-      sessionNumber: Number(item.session_number),
-      date: String(item.journal_date).slice(0, 10),
-      activities: item.activities,
-      observations: item.observations,
-      updatedAt: new Date(item.updated_at).toISOString(),
-    })),
+    journals: [],
     messages: messageRows.rows.map((item) => ({
       evidenceId: `message:${item.id}`,
       role: item.role,
@@ -312,14 +303,14 @@ export async function captureCycleEvidenceSnapshot(db: Queryable, cycleId: strin
     `INSERT INTO cycle_evidence_snapshots
       (id, cycle_id, session_id, cycle_definition, plan_snapshot_id, report_definition,
        report_form_data, report_member_roles, material_requests, journals, messages,
-       discussion_summaries, trajectory_context, content_hash, created_by, discussion_entries)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       discussion_summaries, trajectory_context, content_hash, created_by, discussion_entries, privacy_policy)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      ON CONFLICT (cycle_id, content_hash) DO NOTHING`,
     [id, cycleId, payload.cycle.sessionId, JSON.stringify(payload.cycle), planSnapshot.id,
       JSON.stringify(payload.report.configDefinition), JSON.stringify(payload.report.formData),
       JSON.stringify(payload.report.memberRoles), JSON.stringify(payload.materialRequests),
       JSON.stringify(payload.journals), JSON.stringify(payload.messages), JSON.stringify(payload.discussionSummaries),
-      JSON.stringify(payload.trajectoryContext), contentHash, actorId, JSON.stringify(payload.discussionEntries)],
+      JSON.stringify(payload.trajectoryContext), contentHash, actorId, JSON.stringify(payload.discussionEntries), TEAM_PUBLIC_EVIDENCE_POLICY],
   );
   const stored = await db.query<{ id: string; created_at: Date | string }>(
     "SELECT id, created_at FROM cycle_evidence_snapshots WHERE cycle_id = $1 AND content_hash = $2",
