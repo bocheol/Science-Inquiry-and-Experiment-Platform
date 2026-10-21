@@ -61,4 +61,29 @@ describe("record editing and shared-device boundaries", () => {
     expect([...host.querySelectorAll("textarea")].some(t => t.value === "검토할 새 AI 초안")).toBe(true);
     expect([...host.querySelectorAll("textarea")].some(t => t.value === "기존 교사 작성문")).toBe(false);
   });
+  it("clears an old editor before explicitly saving a fresh draft after a scope change", async () => {
+    const current = fixture();
+    const fresh: RecordWorkspace = { ...current, draft: { revision: 4, sourceRevision: 0, course1: "", course2: "", notes: "",
+      checkedGroups: [], status: "draft", evidence: null, ai: null, previousDraftHidden: true } };
+    let changed = false;
+    const requests: { action: string; data: { startNewDraft?: boolean; course1?: string; course2?: string; expectedRevision?: number } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url.includes("identity=1")) return Response.json({ id: "synthetic-teacher" });
+      if (init?.method === "POST") { requests.push(JSON.parse(init.body as string)); return Response.json({ revision: 6 }); }
+      if (url.includes("studentId=")) return Response.json(changed ? fresh : current);
+      return Response.json({ students: [current.student], settings: current.settings });
+    });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    await mount(createElement(StudentRecordsWorkspace, { user: { id: "synthetic-teacher", role: "teacher" } }));
+    await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes("10901 합성"))!);
+    expect([...host.querySelectorAll("textarea")].some(t => t.value === "기존 교사 작성문")).toBe(true);
+    changed = true;
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "최신 저장본 불러오기")!);
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "비교했습니다 · 내 작성란으로 계속 작성")!);
+    expect([...host.querySelectorAll("textarea")].some(t => t.value === "기존 교사 작성문")).toBe(false);
+    expect(host.textContent).toContain("이전 작성본은 보관했습니다");
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "작성본 저장")!);
+    expect(requests.find(r => r.action === "draft")?.data).toMatchObject({ startNewDraft: true, expectedRevision: 4, course1: "", course2: "" });
+  });
+
 });

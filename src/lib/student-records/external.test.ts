@@ -7,22 +7,28 @@ import { getRecordFile, uploadRecordFile } from "./files";
 import { getRecordWorkspace, saveRecordDraft, saveRecordSubmission } from "./service";
 import type { RecordActor } from "./access";
 
-const provider = vi.hoisted(() => ({ parse: vi.fn() }));
+const provider = vi.hoisted(() => ({ parse: vi.fn(), headers: vi.fn(async () => new Headers({ authorization: "Bearer synthetic-only" })) }));
 vi.mock("@/lib/ai", () => ({ getOpenAIClient: () => ({ responses: { parse: provider.parse } }), safetyIdentifier: () => "synthetic-student", userFacingAiError: () => "합성 생성 오류" }));
 vi.mock("google-auth-library", () => ({
-  GoogleAuth: class { async getClient() { return { getRequestHeaders: async () => new Headers({ authorization: "Bearer synthetic-only" }) }; } },
-  OAuth2Client: class { setCredentials() {} async getRequestHeaders() { return new Headers({ authorization: "Bearer synthetic-only" }); } },
+  GoogleAuth: class { async getClient() { return { getRequestHeaders: () => provider.headers() }; } },
+  OAuth2Client: class { setCredentials() {} async getRequestHeaders() { return provider.headers(); } },
 }));
 const teacher: RecordActor = { id: "teacher_bootstrap", role: "teacher", mustChangePassword: false };
 const student: RecordActor = { id: "demo_student_1", role: "student", mustChangePassword: false };
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 beforeAll(async () => {
   const db = await getDb();
   await db.query("INSERT INTO record_teacher_classes (class_id,teacher_id) VALUES ('class_2026_9',$1)", [teacher.id]);
+  await db.query("INSERT INTO class_journal_teacher_assignments (class_id,teacher_id) VALUES ('class_2026_9',$1)", [teacher.id]);
   await db.query("INSERT INTO record_teacher_settings (teacher_id,spreadsheet_id,folder_id) VALUES ($1,'synthetic-teacher-sheet','synthetic-folder')", [teacher.id]);
   await saveRecordSubmission(student, student.id, { expectedRevision: 0, selected: ["egg", "spectrum"], comments: { egg: "COURSE_ONE_PRIVATE", spectrum: "관찰 설명" }, submit: true });
   await db.query("UPDATE investigation_plans SET form_data = $1 WHERE id = 'demo_plan_1'", [JSON.stringify({ topic: "COURSE_TWO_PRIVATE" })]);
 });
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); provider.parse.mockReset(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); provider.parse.mockReset(); provider.headers.mockReset(); provider.headers.mockImplementation(async () => new Headers({ authorization: "Bearer synthetic-only" })); });
 
 describe("external service boundaries with synthetic transports", () => {
   it("sends independent course inputs and reuses the identical paid result", async () => {
@@ -78,6 +84,37 @@ describe("external service boundaries with synthetic transports", () => {
     expect(decodeURIComponent(writes[0].url)).toContain("플랫폼확정_"); expect(decodeURIComponent(writes[0].url)).not.toContain("'9반'");
     const values = JSON.parse(writes[0].init!.body as string).values;
     expect(values).toHaveLength(2); expect(values[1][4]).toBe("=1+1");
+  });
+  it("prepares auth before its final authorization check and denies the whole batch after a delayed refresh", async () => {
+    const db = await getDb();
+    const peerId = "demo_student_2";
+    const peerWorkspace = await getRecordWorkspace(teacher, peerId);
+    await saveRecordDraft(teacher, peerId, { expectedRevision: peerWorkspace.draft!.revision, expectedSubmissionRevision: peerWorkspace.submission.revision,
+      expectedEvidenceHash: peerWorkspace.evidence!.hash, course1: "합성 두 번째 학생", course2: "합성 검토", notes: "부족한 자료 확인", checkedGroups: ["team_plan", "journal", "team_report", "exam"], finalize: true });
+    vi.stubEnv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}");
+    const writes: string[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") writes.push(String(init.body));
+      if (url.includes(":batchUpdate")) return Response.json({ replies: [{ addSheet: { properties: { sheetId: 78 } } }] });
+      return Response.json({ sheets: [] });
+    });
+    const ready = deferredSignal(), resume = deferredSignal();
+    let calls = 0;
+    provider.headers.mockImplementation(async () => {
+      if (++calls === 3) { ready.resolve(); await resume.promise; }
+      return new Headers({ authorization: "Bearer synthetic-only" });
+    });
+    const pending = exportTeacherRecords(teacher, "synthetic-auth-delay-batch").then(value => ({ value }), error => ({ error }));
+    try {
+      await ready.promise;
+      await db.query("DELETE FROM class_journal_teacher_assignments WHERE teacher_id=$1", [teacher.id]);
+      resume.resolve();
+      expect(await pending).toMatchObject({ error: { status: 403 } });
+      expect(writes).toEqual([]);
+    } finally {
+      resume.resolve(); await pending;
+      await db.query("INSERT INTO class_journal_teacher_assignments(class_id,teacher_id) VALUES('class_2026_9',$1) ON CONFLICT DO NOTHING", [teacher.id]);
+    }
   });
   it("refuses exporting stale final evidence before making any remote call", async () => {
     const transport = vi.fn(); vi.stubGlobal("fetch", transport);

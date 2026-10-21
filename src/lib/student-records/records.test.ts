@@ -15,6 +15,7 @@ const peer: RecordActor = { id: "demo_student_2", role: "student", mustChangePas
 beforeAll(async () => {
   const db = await getDb();
   await db.query("INSERT INTO record_teacher_classes (class_id, teacher_id) VALUES ('class_2026_9', $1)", [teacher.id]);
+  await db.query("INSERT INTO class_journal_teacher_assignments (class_id, teacher_id) VALUES ('class_2026_9', $1)", [teacher.id]);
   await db.query("INSERT INTO users (id,name,login_id,academic_year,role,password_hash,must_change_password,is_master) VALUES ($1,'별도 교사','record-other',2026,'teacher','unused',FALSE,TRUE)", [other.id]);
   await db.query("INSERT INTO users (id,name,login_id,academic_year,role,class_id,password_hash,must_change_password,account_type) VALUES ('record_demo','체험 계정','demo-record',2026,'student','class_2026_9','unused',FALSE,'demo')");
   await db.query("UPDATE team_members SET joined_at = '2026-09-01' WHERE team_id = 'demo_team_1'");

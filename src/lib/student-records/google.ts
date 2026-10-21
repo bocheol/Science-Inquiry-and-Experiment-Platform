@@ -1,7 +1,7 @@
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import { createHash } from "node:crypto";
 import { getDb } from "@/lib/db";
-import { assertRecordActor, assertRecordStudent, RecordError, recordSettings, recordTransaction, teacherRecordStudents, type RecordActor } from "./access";
+import { assertRecordActor, assertRecordStudent, withRecordTransmissionAccess, RecordError, recordSettings, recordTransaction, teacherRecordStudents, type RecordActor } from "./access";
 import { getRecordFile, uploadRecordFile } from "./files";
 import { getRecordWorkspace } from "./service";
 import { combinedRecordBytes, recordBytes, RECORD_ACTIVITIES } from "./model";
@@ -25,15 +25,30 @@ async function authHeaders() {
   return Object.fromEntries((await (await auth.getClient()).getRequestHeaders()).entries());
 }
 
-export async function recordsGoogleRequest(url: string, init: RequestInit = {}) {
+type TransmissionScope = { actor: RecordActor; items: { studentId: string; evidence?: unknown }[] };
+export async function recordsGoogleRequest(url: string, init: RequestInit = {}, scope?: TransmissionScope) {
   // This helper is deliberately not exposed to user-supplied URLs.
   if (!/^https:\/\/(www\.googleapis\.com|sheets\.googleapis\.com)\//.test(url)) throw new RecordError("지원하지 않는 Google 주소입니다.");
-  const response = await fetch(url, { ...init, redirect: "error", headers: { ...(await authHeaders()), ...(init.headers ?? {}) }, signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) {
-    if (response.status === 404) throw new RecordError("Google 파일을 찾을 수 없거나 연결 계정에 접근 권한이 없습니다.", 404);
-    throw new RecordError("Google 저장에 실패했습니다. 연결 계정의 파일 권한과 저장 공간을 확인한 뒤 재시도해 주세요. 플랫폼 원본은 보관되어 있습니다.", 503);
-  }
-  return response;
+  // Token refresh may take arbitrarily long. Do it before acquiring locks,
+  // then validate all recipients and dispatch with the grants still locked.
+  const headers = { ...(await authHeaders()), ...Object.fromEntries(new Headers(init.headers).entries()) };
+  const send = async () => {
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, redirect: "error", headers, signal: AbortSignal.timeout(scope ? 10_000 : 30_000) });
+    } catch (error) {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new RecordError("Google 응답 시간이 초과되었습니다. 원본은 보관되어 있으며, 같은 내보내기 요청으로 저장 결과를 확인한 뒤 재시도해 주세요.", 503);
+      }
+      throw error;
+    }
+    if (!response.ok) {
+      if (response.status === 404) throw new RecordError("Google 파일을 찾을 수 없거나 연결 계정에 접근 권한이 없습니다.", 404);
+      throw new RecordError("Google 저장에 실패했습니다. 연결 계정의 파일 권한과 저장 공간을 확인한 뒤 재시도해 주세요. 플랫폼 원본은 보관되어 있습니다.", 503);
+    }
+    return response;
+  };
+  return scope ? withRecordTransmissionAccess(scope.actor, scope.items, send) : send();
 }
 
 export async function syncRecordFileToDrive(actor: RecordActor, id: string) {
@@ -67,7 +82,7 @@ export async function syncRecordFileToDrive(actor: RecordActor, id: string) {
       const boundary = "records_" + createHash("sha256").update(id).digest("hex");
       const metadata = { id: driveId, name: student.login_id + "_" + file.file_name, parents: [settings.folderId], appProperties: { recordFileId: id, sha256: file.content_hash } };
       const body = Buffer.concat([Buffer.from("--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + JSON.stringify(metadata) + "\r\n--" + boundary + "\r\nContent-Type: " + file.mime_type + "\r\n\r\n"), Buffer.from(file.file_data), Buffer.from("\r\n--" + boundary + "--")]);
-      await recordsGoogleRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id", { method: "POST", headers: { "Content-Type": "multipart/related; boundary=" + boundary }, body });
+      await recordsGoogleRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id", { method: "POST", headers: { "Content-Type": "multipart/related; boundary=" + boundary }, body }, { actor, items: [{ studentId: file.student_id }] });
     }
     await recordTransaction(actor, file.student_id, async client => { await client.query("UPDATE record_files SET drive_status = 'saved' WHERE id = $1", [id]); });
     return { saved: true };
@@ -99,11 +114,13 @@ export async function exportTeacherRecords(actor: RecordActor, requestId: string
   const settings = await recordSettings(await getDb(), actor.id);
   if (!settings.spreadsheetId) throw new RecordError("이 교사의 별도 스프레드시트를 먼저 연결해 주세요.");
   const values: (string | number)[][] = [["학번", "이름", "반", "과탐실 1 선택 활동", "과탐실 1 세특", "1 바이트", "과탐실 2 세특", "2 바이트", "합계", "상태", "검토 버전"]];
+  const exportEvidence: { studentId: string; evidence: unknown }[] = [];
   for (const student of students) {
     const workspace = await getRecordWorkspace(actor, student.id);
     const draft = workspace.draft!;
     if (draft.status !== "final") continue;
     if (draft.sourceRevision !== workspace.submission.revision || draft.evidence?.hash !== workspace.evidence?.hash) throw new RecordError(student.loginId + " 학생의 확정 후 자료가 변경되었습니다. 다시 검토하고 확정해 주세요.", 409);
+    exportEvidence.push({ studentId: student.id, evidence: draft.evidence });
     values.push([student.loginId, student.name, student.classNumber, workspace.submission.selected.map(id => RECORD_ACTIVITIES.find(a => a.id === id)!.label).join(" / "), draft.course1, recordBytes(draft.course1), draft.course2, recordBytes(draft.course2), combinedRecordBytes(draft.course1, draft.course2), "교사 확정", draft.revision]);
   }
   if (values.length === 1) throw new RecordError("내보낼 교사 확정본이 없습니다.");
@@ -117,16 +134,17 @@ export async function exportTeacherRecords(actor: RecordActor, requestId: string
     if (previous.values?.length) {
       const comparable = (rows: unknown[][]) => rows.map(row => Array.from({ length: 11 }, (_, i) => String(row[i] ?? "")));
       if (JSON.stringify(comparable(previous.values)) !== JSON.stringify(comparable(values))) throw new RecordError("이 내보내기 탭에 이미 다른 내용이 있습니다. 기존 내용을 보존했습니다. 새 내보내기로 저장해 주세요.", 409);
-      return { url: "https://docs.google.com/spreadsheets/d/" + settings.spreadsheetId + "/edit#gid=" + sheetId, count: values.length - 1 };
+      return withRecordTransmissionAccess(actor, exportEvidence, async () => ({ url: "https://docs.google.com/spreadsheets/d/" + settings.spreadsheetId + "/edit#gid=" + sheetId, count: values.length - 1 }));
     }
   }
   await assertRecordActor(await getDb(), actor, true);
   // Add a separate tab. Never overwrite the teacher's hand-edited class tabs.
   if (sheetId === undefined) {
-    const result = await (await recordsGoogleRequest(root + ":batchUpdate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ addSheet: { properties: { title, gridProperties: { frozenRowCount: 1, frozenColumnCount: 2 } } } }] }) })).json() as { replies: { addSheet: { properties: { sheetId: number } } }[] };
+    const result = await (await recordsGoogleRequest(root + ":batchUpdate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ addSheet: { properties: { title, gridProperties: { frozenRowCount: 1, frozenColumnCount: 2 } } } }] }) }, { actor, items: exportEvidence })).json() as { replies: { addSheet: { properties: { sheetId: number } } }[] };
     sheetId = result.replies[0].addSheet.properties.sheetId;
   }
   const range = "'" + title + "'!A1:K" + values.length;
-  await recordsGoogleRequest(root + "/values/" + encodeURIComponent(range) + "?valueInputOption=RAW", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ range, values }) });
+  // The request helper prepares auth, then locks and checks the whole batch.
+  await recordsGoogleRequest(root + "/values/" + encodeURIComponent(range) + "?valueInputOption=RAW", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ range, values }) }, { actor, items: exportEvidence });
   return { url: "https://docs.google.com/spreadsheets/d/" + settings.spreadsheetId + "/edit#gid=" + sheetId, count: values.length - 1 };
 }
