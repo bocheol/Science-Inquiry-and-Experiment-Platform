@@ -5,7 +5,7 @@ import { getOpenAIClient, safetyIdentifier, userFacingAiError } from "@/lib/ai";
 import { getAiRuntime, observeOpenAiRequest } from "@/lib/ai-config";
 import { aiRequestKey, beginAiJob, completeAiJob, failAiJob, ownsAiJob, runAiJobStep } from "@/lib/ai-jobs";
 import { studentTextRedactor } from "@/lib/student-privacy";
-import { assertRecordActor, assertRecordStudent, RecordError, recordSettings, recordTransaction, type RecordActor } from "./access";
+import { assertRecordActor, assertRecordEvidenceAccess, assertRecordStudent, RecordError, recordSettings, recordTransaction, type RecordActor } from "./access";
 import { collectRecordEvidence } from "./evidence";
 import { combinedRecordBytes, type RecordAiResult, type RecordEvidence } from "./model";
 import { getRecordFile, saveRecordExtraction } from "./files";
@@ -38,7 +38,7 @@ export async function generateRecordDraft(actor: RecordActor, studentId: string,
   const job = await beginAiJob<RecordAiResult>({ resourceKey: "student-record:" + studentId, requestKey: key, feature: "student_record_draft", actorId: actor.id });
   if (job.kind === "busy") throw new RecordError("이 학생의 초안을 생성 중입니다. 잠시 후 확인해 주세요.", 409);
   if (job.kind === "cached") {
-    await assertRecordStudent(db, actor, studentId);
+    await assertRecordEvidenceAccess(db, actor, studentId, evidence);
     return { result: job.result, evidenceHash: evidence.hash, cached: true };
   }
   try {
@@ -48,6 +48,7 @@ export async function generateRecordDraft(actor: RecordActor, studentId: string,
       const ownSources = sources.filter(s => s.course === course);
       if (!ownSources.length) { parts.push({ sentences: [], warnings: ["과탐실 " + course + "의 확인 가능한 근거가 없습니다."] }); continue; }
       const part = await runAiJobStep(job, "course" + course, async () => {
+        await assertRecordEvidenceAccess(db, actor, studentId, evidence);
         const response = await observeOpenAiRequest("student_record_draft", runtime.model, () => getOpenAIClient().responses.parse({
           model: runtime.model, store: false, reasoning: { effort: runtime.reasoningEffort }, max_output_tokens: 2200,
           safety_identifier: safetyIdentifier(studentId),
@@ -62,6 +63,7 @@ export async function generateRecordDraft(actor: RecordActor, studentId: string,
     const result: RecordAiResult = { course1: parts[0].sentences.map(s => s.text).join(" "), course2: parts[1].sentences.map(s => s.text).join(" "), claims: parts.flatMap((part, i) => part.sentences.map(s => ({ ...s, course: (i + 1) as 1 | 2 }))), warnings: [...evidence.missing, ...parts.flatMap(p => p.warnings)] };
     if (combinedRecordBytes(result.course1, result.course2) > 1500) result.warnings.push("초안 합계가 1,500바이트를 넘습니다. 교사가 줄인 뒤 확정해 주세요.");
     await recordTransaction(actor, studentId, async client => {
+      await assertRecordEvidenceAccess(client, actor, studentId, evidence);
       if (!(await ownsAiJob(client, job.jobId, job.leaseToken))) throw new RecordError("생성 요청이 만료되었습니다. 다시 확인해 주세요.", 409);
       await completeAiJob(client, job.jobId, job.leaseToken, result);
     });

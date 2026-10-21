@@ -29,6 +29,7 @@ export const normalizeRecordText = (text: string) => text.replace(/\r\n?/g, "\n"
 export const recordBytes = (text: string) => new TextEncoder().encode(normalizeRecordText(text)).length;
 export const combinedRecordBytes = (one: string, two: string) => recordBytes(one) + recordBytes(two);
 export const draftSchema = z.object({
+  startNewDraft: z.boolean().optional().default(false),
   expectedRevision: z.number().int().nonnegative(),
   expectedSubmissionRevision: z.number().int().nonnegative(),
   expectedEvidenceHash: z.string().length(64),
@@ -46,7 +47,7 @@ export type RecordSettings = { revision: number; style: string; opensAt: string 
 export type RecordStudent = { id: string; name: string; loginId: string; classNumber: number; status: string; submissionStatus: string; draftStatus: string };
 export type RecordEvidence = { id: string; course: 1 | 2; activity: ActivityId; label: string; text: string; kind: "plan" | "student_statement" | "team_document" | "individual_record" | "exam_feedback" | "discussion"; sourceUrl: string; confirmed: boolean; attachments?: { label: string; url: string }[] };
 export type EvidenceBundle = { sources: RecordEvidence[]; missing: string[]; hash: string; collectedAt: string };
-export type RecordDraft = { revision: number; course1: string; course2: string; notes: string; checkedGroups: string[]; status: string; sourceRevision: number; evidence: EvidenceBundle | null; ai: RecordAiResult | null };
+export type RecordDraft = { previousDraftHidden?: boolean; revision: number; course1: string; course2: string; notes: string; checkedGroups: string[]; status: string; sourceRevision: number; evidence: EvidenceBundle | null; ai: RecordAiResult | null };
 export type RecordAiResult = { course1: string; course2: string; claims: { course: 1 | 2; text: string; evidenceIds: string[] }[]; warnings: string[] };
 export type RecordWorkspace = { student: RecordStudent; submission: RecordSubmission; files: RecordFile[]; settings: RecordSettings; draft?: RecordDraft; evidence?: EvidenceBundle };
 

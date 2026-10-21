@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ACADEMIC_YEAR } from "@/lib/constants";
-import { assertRecordStudent, parseValue, type RecordActor, type RecordDb } from "./access";
+import { assertRecordEvidenceAccess, assertRecordStudent, parseValue, type RecordActor, type RecordDb } from "./access";
 import { COURSE_TWO_GROUPS, RECORD_ACTIVITIES, type ActivityId, type EvidenceBundle, type RecordEvidence } from "./model";
 
 function readable(value: unknown): string {
@@ -96,7 +96,9 @@ export async function collectRecordEvidence(db: RecordDb, actor: RecordActor, st
   const journals = (await db.query<{ id: string; journal_date: string; activities: string; observations: string; reflections: string }>(
     `SELECT j.id, j.journal_date, j.activities, j.observations, j.reflections FROM experiment_journals j
      JOIN inquiry_sessions s ON s.id = j.session_id JOIN teams t ON t.id = s.team_id JOIN classes c ON c.id = t.class_id
-     WHERE j.student_id = $1 AND c.academic_year = $2 ORDER BY j.journal_date, j.id`, [studentId, ACADEMIC_YEAR])).rows;
+     LEFT JOIN class_journal_teacher_assignments a ON a.class_id = c.id AND a.teacher_id = $3
+     WHERE j.student_id = $1 AND c.academic_year = $2 AND ($4 = 'student' OR a.teacher_id IS NOT NULL)
+     ORDER BY j.journal_date, j.id`, [studentId, ACADEMIC_YEAR, actor.id, actor.role])).rows;
   let photoCount = 0;
   for (const j of journals) {
     const images = (await db.query<{ id: string; file_name: string }>("SELECT id, file_name FROM experiment_journal_images WHERE journal_id = $1 ORDER BY id", [j.id])).rows;
@@ -122,5 +124,6 @@ export async function collectRecordEvidence(db: RecordDb, actor: RecordActor, st
   if (photoCount) missing.push("본인 일지 사진 " + photoCount + "장: 원본을 열어 별도 확인 필요 (AI 미판독)");
   for (const id of selected) if (!sources.some(s => s.activity === id && s.confirmed)) missing.push(RECORD_ACTIVITIES.find(a => a.id === id)!.label + "은 학생 설명만 있거나 원문 확인 대기");
   sources.sort((a, b) => a.id.localeCompare(b.id));
+  await assertRecordEvidenceAccess(db, actor, studentId, { sources });
   return { sources, missing, hash: createHash("sha256").update(JSON.stringify({ sources, missing })).digest("hex"), collectedAt: new Date().toISOString() };
 }
