@@ -12,7 +12,7 @@ prepare = importlib.util.module_from_spec(spec); spec.loader.exec_module(prepare
 source = sys.argv[1] if len(sys.argv) > 1 else subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, text=True).strip()
 environment = {"PATH": os.environ.get("PATH", os.defpath), "PYTHONDONTWRITEBYTECODE": "1"}
 for script, arguments in [
-    ("deployment-state.test.py", []), ("executor.test.py", []), ("preparation.test.py", [source]),
+    ("deployment-state.test.py", []), ("database-guard.test.py", []), ("executor.test.py", []), ("preparation.test.py", [source]),
 ]:
     subprocess.run([sys.executable, str(ROOT / "scripts/deployment" / script), *arguments],
                    cwd=ROOT, env=environment, preexec_fn=prepare.deny_network, check=True)

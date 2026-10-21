@@ -13,7 +13,6 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import subprocess
 import sys
 import time
 import uuid
@@ -21,6 +20,7 @@ import uuid
 sys.dont_write_bytecode = True
 from cloud_api import CloudResources, GcsStore, GoogleApi
 from deployment_state import DeploymentJournal
+from database_guard import DatabaseInspector, assert_run_database, request_timeout, verified_context
 
 
 def digest(value):
@@ -54,10 +54,16 @@ def service_observation(service):
             "latest_revision": revision_id(service.get("latestCreatedRevision", "")),
             "policy_sha256": digest({key: service.get(key) for key in ("ingress", "invokerIamDisabled", "defaultUriDisabled", "iapEnabled", "binaryAuthorization", "scaling", "customAudiences")}),
             "template_sha256": digest(service.get("template", {})),
-            "image": service.get("template", {}).get("containers", [{}])[0].get("image")}
+            "template_image": service.get("template", {}).get("containers", [{}])[0].get("image")}
 
 
 def validate_plan(plan):
+    target = plan.get("database_target", {})
+    if (target.get("database") != plan.get("database_name") or not target.get("connection_name") or not target.get("created_at")
+            or any(not re.fullmatch(r"[0-9a-f]{64}", target.get(key, "")) for key in ("server_ca_sha256", "addresses_sha256"))):
+        raise RuntimeError("Verified Cloud SQL/Cloud Run/PostgreSQL target binding is required")
+    if type(plan.get("expected_service", {}).get("request_timeout_seconds")) is not int:
+        raise RuntimeError("A verified request timeout is required")
     for field in ("source_commit", "rollback_commit"):
         if not re.fullmatch(r"[0-9a-f]{40}", plan.get(field, "")):
             raise RuntimeError("Exact reviewed candidate and normal rollback commits are required")
@@ -108,26 +114,17 @@ def verify_execution_package(plan, directory):
         raise RuntimeError("Execution plan does not match the prepared code and migrations")
 
 
-class DatabaseInspector:
-    """Uses an existing libpq PG* environment/service; never accepts a URL in argv."""
-    def __init__(self, expected_database):
-        self.expected_database = expected_database
-
-    def read(self):
-        sql = """BEGIN READ ONLY;
-SET LOCAL statement_timeout = '5s';
-SELECT json_build_object('database',current_database(),
- 'migrations',(SELECT json_agg(t ORDER BY version) FROM (SELECT version,name,checksum FROM schema_migrations) t),
- 'active_other_transactions',(SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND xact_start IS NOT NULL));
-COMMIT;"""
-        result = subprocess.run(["psql", "-X", "-qAt", "--no-password", "-v", "ON_ERROR_STOP=1", "-c", sql],
-                                capture_output=True, text=True, timeout=10)
-        if result.returncode:
-            raise RuntimeError("Read-only database inspection failed; connection details suppressed")
-        rows = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
-        if len(rows) != 1 or rows[0].pop("database") != self.expected_database:
-            raise RuntimeError("Database identity mismatch")
-        return rows[0]
+def inspect_operating(cloud, database):
+    raw = cloud.get_service()
+    context = verified_context(cloud, raw, database)
+    instance = cloud.instance()
+    return {"service": {**service_observation(raw), "serving_image": context["serving_image"],
+                        "request_timeout_seconds": context["timeouts"]["serving"]},
+            "database_target": context["target"], "database": context["database"],
+            "cloud_sql": {"state": instance.get("state"), "databaseVersion": instance.get("databaseVersion"),
+                          "backup_enabled": instance.get("settings", {}).get("backupConfiguration", {}).get("enabled")},
+            "successful_backup_ids": [str(row["id"]) for row in cloud.backups() if row.get("status") == "SUCCESSFUL"],
+            "google_server_connection": "NOT_VERIFIED", "writes_performed": False}
 
 
 class DurableLease:
@@ -192,22 +189,35 @@ class IntegratedExecutor:
         self.lease.checkpoint(self.journal.state)
 
     def connect_lease(self, *, new=False):
+        # Verify before even the first GCS write. A local database with the same
+        # database name cannot provide evidence for a production deployment.
+        raw = self.cloud.get_service()
+        self.check_database_context(raw)
+        if new:
+            observed = service_observation(raw)
+            if any(observed[key] != self.plan["expected_service"][key] for key in ("uid", "etag", "policy_sha256", "template_sha256", "serving_revision")):
+                raise RuntimeError("Production baseline changed before lease acquisition")
         if new:
             self.lease.acquire(self.journal.state)
         else:
             self.lease.attach(self.journal.state)
 
     def inspect(self):
-        service = service_observation(self.cloud.get_service())
-        database = self.database.read()
+        return inspect_operating(self.cloud, self.database)
+
+    def check_database_context(self, raw):
+        context = verified_context(self.cloud, raw, self.database, self.plan["expected_service"]["serving_revision"])
+        database = context["database"]
+        if context["target"] != self.plan["database_target"] or database.get("target_sha256") != digest(context["target"]):
+            raise RuntimeError("Verified database target changed; preserve state and review the binding")
+        if (database.get("stats_visible") is not True or database.get("track_activities") is not True
+                or database.get("unknown_client_sessions") != 0):
+            raise RuntimeError("Complete database activity visibility is not verified")
+        timeout = self.plan["expected_service"]["request_timeout_seconds"]
+        if any(actual != timeout for actual in context["timeouts"].values()):
+            raise RuntimeError("Planned drain timeout differs from the actual Cloud Run revision/template")
         self.compatible(database["migrations"])
-        instance = self.cloud.instance()
-        backups = self.cloud.backups()
-        return {"service": service, "database": database,
-                "cloud_sql": {"state": instance.get("state"), "databaseVersion": instance.get("databaseVersion"),
-                              "backup_enabled": instance.get("settings", {}).get("backupConfiguration", {}).get("enabled")},
-                "successful_backup_ids": [str(row["id"]) for row in backups if row.get("status") == "SUCCESSFUL"],
-                "google_server_connection": "NOT_VERIFIED", "writes_performed": False}
+        return database, context["timeouts"]["baseline"]
 
     def compatible(self, rows, *, full=False):
         expected = self.plan["migration_manifest"]
@@ -238,8 +248,7 @@ class IntegratedExecutor:
         if action not in (*self.STAGES, *self.PROMOTIONS, "backup"):
             raise RuntimeError("Unknown deployment action")
         raw, observation = self.checked_service(ready=action != "recover_normal")
-        db = self.database.read()
-        self.compatible(db["migrations"])
+        db, actual_timeout = self.check_database_context(raw)
         completed, revisions = self.state["completed"], self.state["revisions"]
         if not completed:
             baseline = self.plan["expected_service"]
@@ -251,10 +260,10 @@ class IntegratedExecutor:
         if action in ("backup", "stage_normal", "stage_candidate"):
             if "maintenance_traffic" not in completed or observation["serving_revision"] != revisions["maintenance"]:
                 raise RuntimeError("Maintenance must receive all traffic before a migration-capable stage")
-            delay = self.plan["expected_service"]["request_timeout_seconds"] + 30
+            delay = actual_timeout + 30
             if not 0 < delay <= 3630 or self.clock() < self.state["maintenance_since"] + delay:
                 raise RuntimeError("Wait for the reviewed request drain interval; inspect again later")
-            if db["active_other_transactions"] or not self.plan.get("external_writers_quiesced"):
+            if db["active_other_transactions"] or db["prepared_transactions"] or not self.plan.get("external_writers_quiesced"):
                 raise RuntimeError("Other writers are not confirmed quiescent")
         if action == "stage_normal":
             if "backup" not in completed:
@@ -319,6 +328,9 @@ class IntegratedExecutor:
 
     def verify_revision(self, kind, revision):
         value = self.cloud.revision(revision)
+        assert_run_database(value, {"summary": self.plan["database_target"]})
+        if request_timeout(value) != self.plan["expected_service"]["request_timeout_seconds"]:
+            raise RuntimeError("Reviewed revision request timeout changed")
         if (value.get("reconciling") or not any(c.get("type") == "Ready" and c.get("state") == "CONDITION_SUCCEEDED" for c in value.get("conditions", []))
                 or value.get("containers", [{}])[0].get("image") != self.plan["images"][kind]["digest"]):
             raise RuntimeError("Reviewed revision/image is not confirmed ready")
@@ -343,8 +355,7 @@ class IntegratedExecutor:
             return {"status": "OUTCOME_UNRESOLVED", "retry_allowed": False}
         if observation["policy_sha256"] != self.plan["expected_service"]["policy_sha256"]:
             return {"status": "POLICY_UNRESOLVED", "retry_allowed": False}
-        db = self.database.read()
-        self.compatible(db["migrations"])
+        db, _actual_timeout = self.check_database_context(raw)
         if failed:
             # A failed candidate can leave the service's terminal condition
             # failed while the separately staged normal revision is still ready.
@@ -400,12 +411,13 @@ class IntegratedExecutor:
     def finish(self):
         if self.state["pending"] or self.state["completed"][-1:] not in (["promote_candidate"], ["recover_normal"]):
             raise RuntimeError("Keep the global lease until service restoration is confirmed")
-        _raw, observation = self.checked_service(ready=self.state["completed"][-1] != "recover_normal")
+        raw, observation = self.checked_service(ready=self.state["completed"][-1] != "recover_normal")
         kind = "candidate" if self.state["completed"][-1] == "promote_candidate" else "normal"
         if observation["serving_revision"] != self.state["revisions"][kind]:
             raise RuntimeError("Serving revision changed")
         self.verify_revision(kind, self.state["revisions"][kind])
-        self.compatible(self.database.read()["migrations"], full=True)
+        db, _actual_timeout = self.check_database_context(raw)
+        self.compatible(db["migrations"], full=True)
         self.journal.state["phase"] = "COMPLETE_" + kind.upper()
         self.save()
         self.lease.release()
@@ -415,7 +427,7 @@ class IntegratedExecutor:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", required=True, type=Path)
-    parser.add_argument("--state", required=True, type=Path)
+    parser.add_argument("--state", type=Path)
     parser.add_argument("--package", type=Path)
     parser.add_argument("--command", choices=["inspect", "step", "reconcile", "finish"], default="inspect")
     parser.add_argument("--action")
@@ -426,6 +438,8 @@ def main():
     plan = json.loads(args.plan.read_text())
     writes = args.command in ("step", "reconcile", "finish")
     if writes:
+        if not args.state:
+            parser.error("Mutating commands require a durable --state path")
         validate_plan(plan)
         if not args.package:
             parser.error("The verified exported --package is required for mutating commands")
@@ -437,9 +451,7 @@ def main():
     database = DatabaseInspector(plan["database_name"])
     # inspect never acquires a cloud lease and never creates/overwrites run state.
     if args.command == "inspect":
-        service = service_observation(cloud.get_service())
-        result = {"service": service, "database": database.read(), "backup_count": len(cloud.backups()),
-                  "google_server_connection": "NOT_VERIFIED", "plan_sha256": digest(plan), "writes_performed": False}
+        result = inspect_operating(cloud, database)
     else:
         journal = DeploymentJournal(args.state, plan["source_commit"]) if args.new_run else DeploymentJournal.resume(args.state, plan["source_commit"])
         with journal:

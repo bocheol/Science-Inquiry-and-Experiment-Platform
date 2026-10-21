@@ -10,6 +10,10 @@ import urllib.error
 from cloud_api import CloudError, GoogleApi, GcsStore
 from deployment_state import DeploymentJournal
 from integrated_executor import IntegratedExecutor, digest, service_observation, traffic
+from database_guard import DatabaseInspector, database_target
+
+# Placeholder public CA bytes for offline adapter tests, not a usable credential.
+SYNTHETIC_CA = "-----BEGIN CERTIFICATE-----\nc3ludGhldGljLWNh\n-----END CERTIFICATE-----\n"
 
 
 class Store:
@@ -34,8 +38,13 @@ class Store:
 
 
 class Database:
-    def __init__(self, rows): self.rows = copy.deepcopy(rows); self.active = 0
-    def read(self): return {"migrations": copy.deepcopy(self.rows), "active_other_transactions": self.active}
+    expected_database = "synthetic_database"
+    def __init__(self, rows):
+        self.rows = copy.deepcopy(rows); self.active = 0; self.prepared = 0; self.visible = True
+    def read(self, target):
+        return {"migrations": copy.deepcopy(self.rows), "active_other_transactions": self.active,
+                "prepared_transactions": self.prepared, "stats_visible": self.visible, "track_activities": True,
+                "unknown_client_sessions": 0, "target_sha256": digest(target["summary"])}
 
 
 class Cloud:
@@ -45,13 +54,24 @@ class Cloud:
         self.database, self.rows, self.images, self.clock = database, rows, images, clock
         self.raw = {"uid": "synthetic-uid", "etag": "etag-1", "generation": "1", "observedGeneration": "1", "reconciling": False,
                     "terminalCondition": {"state": "CONDITION_SUCCEEDED"}, "latestCreatedRevision": "synthetic-previous",
-                    "template": {"revision": "synthetic-previous", "timeout": "1s", "containers": [{"image": "synthetic-previous-image", "env": [{"name": "SYNTHETIC", "value": "DO_NOT_LOG_SYNTHETIC_SECRET"}]}]},
+                    "template": {"revision": "synthetic-previous", "timeout": "1s", "containers": [{"image": "synthetic-previous-image", "env": [
+                        {"name": "SYNTHETIC", "value": "DO_NOT_LOG_SYNTHETIC_SECRET"},
+                        {"name": "INSTANCE_UNIX_SOCKET", "value": "/cloudsql/synthetic-project:synthetic-region:synthetic-db"},
+                        {"name": "DB_NAME", "value": "synthetic_database"}],
+                        "volumeMounts": [{"name": "sql", "mountPath": "/cloudsql"}]}],
+                        "volumes": [{"name": "sql", "cloudSqlInstance": {"instances": ["synthetic-project:synthetic-region:synthetic-db"]}}]},
                     "trafficStatuses": traffic("synthetic-previous")}
-        self.calls = []; self.operations = {}; self.revisions = {}; self.backup_rows = []
+        self.calls = []; self.operations = {}; self.backup_rows = []
+        self.revisions = {"synthetic-previous": {**copy.deepcopy(self.raw["template"]), "conditions": [{"type": "Ready", "state": "CONDITION_SUCCEEDED"}]}}
         self.lose_response = False; self.fail_candidate = False; self.pending_operation = False
     def get_service(self): return copy.deepcopy(self.raw)
     def revision(self, revision): return copy.deepcopy(self.revisions[revision])
-    def instance(self): return {"state": "RUNNABLE", "databaseVersion": "POSTGRES_16", "settings": {"backupConfiguration": {"enabled": True}}}
+    def instance(self):
+        return {"project": self.project, "name": self.sql_instance, "region": self.region,
+                "connectionName": f"{self.project}:{self.region}:{self.sql_instance}", "createTime": "2026-01-01T00:00:00Z",
+                "instanceType": "CLOUD_SQL_INSTANCE", "state": "RUNNABLE", "databaseVersion": "POSTGRES_16",
+                "serverCaCert": {"cert": SYNTHETIC_CA}, "ipAddresses": [{"type": "PRIVATE", "ipAddress": "192.0.2.10"}],
+                "settings": {"backupConfiguration": {"enabled": True}, "ipConfiguration": {"serverCaMode": "GOOGLE_MANAGED_INTERNAL_CA"}}}
     def backups(self): return copy.deepcopy(self.backup_rows)
     def patch_service(self, etag, *, traffic, template=None):
         if etag != self.raw["etag"]: raise CloudError(409)
@@ -65,7 +85,7 @@ class Cloud:
             self.raw["latestCreatedRevision"] = revision
             image = template["containers"][0]["image"]
             failed = self.fail_candidate and image == self.images["candidate"]["digest"]
-            self.revisions[revision] = {"conditions": [{"type": "Ready", "state": "CONDITION_FAILED" if failed else "CONDITION_SUCCEEDED"}], "containers": [{"image": image}]}
+            self.revisions[revision] = {**copy.deepcopy(template), "conditions": [{"type": "Ready", "state": "CONDITION_FAILED" if failed else "CONDITION_SUCCEEDED"}]}
             if image == self.images["normal"]["digest"]:
                 self.database.rows = copy.deepcopy(self.rows)
         self.raw["terminalCondition"]["state"] = "CONDITION_FAILED" if failed else "CONDITION_SUCCEEDED"
@@ -94,6 +114,8 @@ class ExecutorTests(unittest.TestCase):
         self.cloud = Cloud(self.db, self.rows, images, lambda: self.now)
         observed = service_observation(self.cloud.get_service())
         self.plan = {"source_commit": "a" * 40, "rollback_commit": "b" * 40, "images": images, "migration_manifest": self.rows,
+                     "database_name": self.db.expected_database,
+                     "database_target": database_target(self.cloud.instance(), self.cloud.project, self.cloud.sql_instance, self.db.expected_database)["summary"],
                      "artifact_manifest_sha256": "c" * 64, "external_writers_quiesced": True,
                      "expected_service": {**observed, "request_timeout_seconds": 1},
                      "image_build_review": {"source_archive_verified": True, "build_id": "synthetic-build"},
@@ -197,6 +219,52 @@ class ExecutorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "quiescent"):
             self.executor.step("backup", approval_hash=digest(self.plan))
         self.assertNotIn("backup", self.cloud.calls)
+
+    def rejected_before_new_lease(self, database=None, plan=None):
+        store = Store()
+        with DeploymentJournal(Path(self.temp.name) / "denied.json", "a" * 40) as journal:
+            executor = IntegratedExecutor(plan or self.plan, self.cloud, database or self.db, store, journal)
+            with self.assertRaises(RuntimeError): executor.connect_lease(new=True)
+        self.assertEqual(store.values, {})
+        self.assertEqual(self.cloud.calls, [])
+
+    def test_same_database_name_on_other_instance_blocks_before_any_cloud_write(self):
+        database = DatabaseInspector(self.db.expected_database,
+            environment={"PGHOST": "192.0.2.99", "PGDATABASE": self.db.expected_database, "PGUSER": "synthetic-reader"},
+            runner=lambda *_args, **_kwargs: self.fail("wrong endpoint must be rejected before psql"))
+        self.rejected_before_new_lease(database)
+
+    def test_hidden_statistics_with_zero_transactions_block_before_lease(self):
+        self.db.visible = False; self.db.active = 0
+        self.rejected_before_new_lease()
+
+    def test_wrong_planned_wait_blocks_before_lease_even_with_zero_transactions(self):
+        plan = copy.deepcopy(self.plan); plan["expected_service"]["request_timeout_seconds"] = 0
+        self.rejected_before_new_lease(plan=plan)
+
+    def test_actual_serving_revision_timeout_is_checked_not_just_template(self):
+        self.cloud.revisions["synthetic-previous"]["timeout"] = "300s"
+        self.rejected_before_new_lease()
+
+    def test_actual_running_database_mount_must_match_backup_target(self):
+        self.cloud.revisions["synthetic-previous"]["volumes"][0]["cloudSqlInstance"]["instances"] = ["synthetic-project:synthetic-region:other-db"]
+        self.rejected_before_new_lease()
+
+    def test_prepared_transaction_blocks_backup(self):
+        self.step("stage_maintenance"); self.step("maintenance_traffic"); self.now += 60
+        self.db.prepared = 1
+        with self.assertRaisesRegex(RuntimeError, "quiescent"):
+            self.executor.step("backup", approval_hash=digest(self.plan))
+        self.assertNotIn("backup", self.cloud.calls)
+
+    def test_visibility_loss_preserves_pending_request_and_lease(self):
+        self.cloud.lose_response = True
+        with self.assertRaises(CloudError): self.executor.step("stage_maintenance", approval_hash=digest(self.plan))
+        checkpoint = copy.deepcopy(self.store.values)
+        self.db.visible = False
+        with self.assertRaisesRegex(RuntimeError, "visibility"): self.executor.reconcile()
+        self.assertEqual(self.store.values, checkpoint)
+        self.assertIsNotNone(self.executor.state["pending"])
 
     def test_read_only_inspection_does_not_call_mutations_or_claim_google_connection(self):
         before = copy.deepcopy(self.store.values)

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
@@ -74,6 +74,31 @@ async function allowSyntheticTeacher(pool) {
   await pool.query("INSERT INTO class_journal_teacher_assignments(class_id,teacher_id) VALUES('drill-class','drill-teacher') ON CONFLICT DO NOTHING");
   await pool.query("INSERT INTO record_teacher_classes(class_id,teacher_id) VALUES('drill-class','drill-teacher') ON CONFLICT DO NOTHING");
 }
+async function activityVisibilityChecks(pool) {
+  const sql = await readFile(new URL('./database-inspection.sql', import.meta.url), 'utf8');
+  const observe = async (limited = false) => {
+    // Use an existing built-in role in this ephemeral DB. No role or monitoring
+    // grant is created. Every role change is local to the read-only transaction.
+    const result = await pool.query(limited ? sql.replace('BEGIN READ ONLY;', 'BEGIN READ ONLY;\nSET LOCAL ROLE pg_read_all_data;') : sql);
+    return result.find(item => item.rows?.[0]?.inspection)?.rows[0].inspection;
+  };
+  const writer = await pool.connect();
+  try {
+    await writer.query('BEGIN');
+    const visible = await observe();
+    assert.equal(visible.stats_visible, true);
+    assert.ok(visible.active_other_transactions >= 1);
+    const limited = await observe(true);
+    assert.equal(limited.stats_visible, false);
+    assert.equal(limited.active_other_transactions, 0);
+    assert.ok(limited.unknown_client_sessions >= 1);
+    await writer.query('SET LOCAL track_activities = off');
+    const disabled = await observe();
+    assert.equal(disabled.stats_visible, true);
+    assert.ok(disabled.unknown_client_sessions >= 1);
+    return { visibleTransaction: 'passed', hiddenOtherRoleZeroIsUnverified: 'passed', disabledSessionIsUnverified: 'passed' };
+  } finally { await writer.query('ROLLBACK'); writer.release(); }
+}
 async function applicationChecks() {
   const teacher = await login('synthetic-teacher'), student = await login('10901'), peer = await login('10902');
   const teacherView = await api(teacher, 'drill-teacher', '?studentId=drill-owner');
@@ -130,6 +155,7 @@ try {
   const original = (await database.query('SELECT id,student_id,activities,observations,reflections FROM experiment_journals ORDER BY id')).rows;
   const baselineMigrations = (await database.query('SELECT version,name,checksum FROM schema_migrations ORDER BY version')).rows;
   assert.equal(baselineMigrations.length, 12);
+  const activityVisibility = await activityVisibilityChecks(database);
   const maintenance = await startApp('science-inquiry-maintenance', 'science_release_drill');
   assert.equal(maintenance.mode, 'maintenance');
   assert.equal((await fetch(app.url + '/login')).status, 503);
@@ -159,7 +185,7 @@ try {
     const result = { normalRollbackCommit: '86c028cd00efa1e012ef91cbb254796f952209bc',
       normalImageConfigId: JSON.parse(await docker('image', 'inspect', 'science-inquiry-normal-rollback'))[0].Id,
       candidateImageConfigId: JSON.parse(await docker('image', 'inspect', 'science-inquiry-validation'))[0].Id,
-      normalService: normal, backupRestore: 'passed', restoredApplication: 'passed', migrations: 15,
+      normalService: normal, backupRestore: 'passed', restoredApplication: 'passed', migrations: 15, activityVisibility,
       externalNetwork: 'blocked by internal Docker network', data: 'synthetic', productionCloudSqlRestore: 'not tested' };
     if (process.env.RUNNER_TEMP) await writeFile(join(process.env.RUNNER_TEMP, 'rollback-drill-result.json'), JSON.stringify(result, null, 2), { mode: 0o600 });
     console.log(JSON.stringify(result));

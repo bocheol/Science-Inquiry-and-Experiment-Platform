@@ -29,12 +29,32 @@ The journal-only deployment command is not compatible with this release.
 
 ## Read-only inspection first
 
-`integrated_executor.py --command inspect` uses an **existing** gcloud login and
-an existing libpq connection (`PG*` variables or service file). Its input needs
+The separate [read-only operating checklist](READ_ONLY_CHECKS.md) contains no
+deployment commands. `integrated_executor.py --command inspect` uses an **existing** gcloud login and
+an existing direct libpq TLS connection (`PG*` variables). Its input needs
 the selected project, region, service, SQL instance and database name. The
 default command makes GET requests and a `BEGIN READ ONLY` migration query; it
 does not acquire a lease. It prints revision/image identifiers and fingerprints,
 not environment values or database credentials. Keep its output outside Git.
+The actual serving image and the latest template image are reported separately.
+
+The inspector binds the Cloud SQL backup instance's current API metadata and
+dedicated per-instance CA to the exact PostgreSQL endpoint, then verifies both
+the Cloud Run template and serving revision's socket/database/volume routing.
+libpq must validate that CA, with no plaintext or GSS fallback. Shared/customer
+CAs, proxies, sockets, service files, opaque DB routing secrets and ambiguous
+configuration fail closed; no network or permission change is made to pass.
+The binding fingerprint is part of the approved plan and is checked again before
+the first lease write, each deployment step, reconciliation and completion.
+
+Full activity visibility (`pg_read_all_stats` effective privileges or superuser)
+and activity tracking must be verified. Hidden/disabled session statistics never
+turn a visible zero into quiescence. Active and prepared transactions block the
+backup/migration stage. These checks do not prevent future background writers.
+Drain time uses the actual original serving revision's request timeout plus 30
+seconds, and also checks current serving/template settings against the plan.
+Missing or mismatched timeout evidence blocks changes; no monitoring grant is
+created automatically.
 
 Do not use the application `/api/health` endpoint for a production read-only
 audit: the application `getDb()` can initialize the schema and run migrations.

@@ -25,6 +25,8 @@ PINNED_TOOLS = [
     "scripts/deployment/deployment_state.py",
     "scripts/deployment/cloud_api.py",
     "scripts/deployment/integrated_executor.py",
+    "scripts/deployment/database_guard.py",
+    "scripts/deployment/database-inspection.sql",
     "scripts/deployment/google-readonly.mjs",
     "scripts/deployment/rollback-drill.mjs",
     "scripts/deployment/migration-manifest.mjs",
