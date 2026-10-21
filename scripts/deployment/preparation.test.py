@@ -8,12 +8,15 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import integrated_executor
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = sys.argv.pop(1)
 MAIN = "bf456bceae36186f1a0fb7e408776361506c7689"
 BASELINE = "16b437f9458791029c00252a1aef6ba872240c97"
 REPORTED_PR = "6c83c9b4566a22a099f05345f499d1de05d940c6"
+ROLLBACK_TREE = "2d5e08efca729e6e7f96d80450c034d840c3b181"
+BUILDER = "example.invalid/synthetic/builder@sha256:" + "0" * 64
 spec = importlib.util.spec_from_file_location("prepare_integration", ROOT / "scripts/prepare-integrated-deployment.py")
 prepare = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prepare)
@@ -28,7 +31,8 @@ class PreparationTests(unittest.TestCase):
     def run_prepare(self, **kwargs):
         return prepare.prepare(ROOT, SOURCE, MAIN, BASELINE, self.output,
                                "example.invalid/synthetic/review", True,
-                               reported_pr_head=REPORTED_PR, **kwargs)
+                               reported_pr_head=REPORTED_PR, rollback_ref=ROLLBACK_TREE,
+                               rollback_is_tree=True, docker_builder_image=BUILDER, **kwargs)
 
     def test_pinned_helpers_ignore_mutable_worktree_and_inventory_covers_outputs(self):
         original = Path.read_bytes
@@ -47,6 +51,10 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(plan["reviewed_baseline_origin"], "reconstructed-pr-diff")
         self.assertEqual(plan["reported_pr_head"], REPORTED_PR)
         self.assertEqual(plan["reconstructed_from_main_commit"], MAIN)
+        self.assertEqual(plan["normal_rollback"]["source_tree"], ROLLBACK_TREE)
+        self.assertTrue(plan["normal_rollback"]["migrations_match_candidate"])
+        self.assertIn("@sha256:", plan["image_inputs"]["node"])
+        self.assertTrue(all(step["name"] == BUILDER for step in json.loads((self.output / "cloudbuild.review.json").read_text())["steps"]))
         self.assertEqual([row["version"] for row in plan["migration_manifest"]], [f"{n:04d}" for n in range(1, 16)])
         for item in plan["tool_sources"]:
             fixed = subprocess.check_output(["git", "show", SOURCE + ":" + item["path"]], cwd=ROOT)
@@ -67,13 +75,30 @@ class PreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Preparer differs"):
                 self.run_prepare()
 
+    def test_execution_requires_the_reviewed_copy_and_untampered_complete_package(self):
+        plan = self.run_prepare()
+        execution_plan = {"source_commit": plan["source_commit"], "rollback_commit": plan["normal_rollback"]["source_commit"],
+                          "migration_manifest": plan["migration_manifest"], "artifact_manifest_sha256": plan["artifact_manifest_sha256"]}
+        with self.assertRaisesRegex(RuntimeError, "reviewed exported"):
+            integrated_executor.verify_execution_package(execution_plan, self.output)
+        with patch.object(integrated_executor, "__file__", str(self.output / "tools/scripts/deployment/integrated_executor.py")):
+            integrated_executor.verify_execution_package(execution_plan, self.output)
+            (self.output / "tools/scripts/deployment/cloud_api.py").write_text("# modified helper\n")
+            with self.assertRaisesRegex(RuntimeError, "file changed"):
+                integrated_executor.verify_execution_package(execution_plan, self.output)
+
     def test_moving_refs_and_incorrect_source_kind_are_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "exact Git object"):
             prepare.prepare(ROOT, "main", MAIN, BASELINE, self.output, "example.invalid/synthetic/review",
-                            True, reported_pr_head=REPORTED_PR)
+                            True, reported_pr_head=REPORTED_PR, rollback_ref=ROLLBACK_TREE, rollback_is_tree=True, docker_builder_image=BUILDER)
         with self.assertRaisesRegex(RuntimeError, "object type"):
             prepare.prepare(ROOT, MAIN, MAIN, BASELINE, self.output, "example.invalid/synthetic/review",
-                            True, reported_pr_head=REPORTED_PR)
+                            True, reported_pr_head=REPORTED_PR, rollback_ref=ROLLBACK_TREE, rollback_is_tree=True, docker_builder_image=BUILDER)
+
+    def test_mutable_image_reference_is_rejected(self):
+        for value in ["node:24-alpine", "gcr.io/cloud-builders/docker:latest", "example.invalid/image@sha256:bad"]:
+            with self.assertRaisesRegex(RuntimeError, "digest"):
+                prepare.pinned_image(value)
 
     def test_import_sandbox_blocks_network_credentials_and_unrelated_files(self):
         code = """const assert=require('node:assert/strict'), fs=require('node:fs'), net=require('node:net');

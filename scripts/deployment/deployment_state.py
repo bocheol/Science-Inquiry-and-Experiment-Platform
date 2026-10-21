@@ -1,4 +1,4 @@
-"""Offline, testable coordination contract. Contains no cloud executor."""
+"""Durable local journal shared by the explicit integrated deployment executor."""
 import json
 import fcntl
 import tempfile
@@ -37,6 +37,8 @@ class DeploymentLease:
 
 class DeploymentJournal:
     EFFECTS = {
+        "stage_maintenance": ("service",), "stage_normal": ("service", "database"),
+        "recover_normal": ("traffic",),
         "stage_recovery": ("service",), "maintenance_traffic": ("traffic",),
         "backup": ("backup",), "stage_candidate": ("service", "database"),
         "promote_candidate": ("traffic",), "recover_traffic": ("traffic",),

@@ -45,6 +45,9 @@ INSERT INTO experiment_journals VALUES('own','session9','owner','2026-10-21','OW
 INSERT INTO experiment_journal_images VALUES('photo','own','synthetic.png',X'010203');
 `);
 const query = async (sql, values=[]) => {
+  // SQLite cannot enforce PostgreSQL lock or statement deadlines. Actual
+  // deadlines and concurrent saves are checked in the PostgreSQL CI suite.
+  if (/^SET LOCAL (lock_timeout|statement_timeout) = '5s'$/.test(sql)) return {rows:[]};
   const args=[];
   const converted=sql.replace(/^BEGIN ISOLATION LEVEL READ COMMITTED$/,'BEGIN').replace(/ FOR (UPDATE|SHARE)\b/g,'').replace(/\$(\d+)/g,(_, n)=>{ args.push(values[Number(n)-1]); return '?'; });
   const stmt=sqlite.prepare(converted);
@@ -205,7 +208,7 @@ await check('all students are checked in one locked transaction before one PUT',
       trace.push('PUT');
       assert.equal(JSON.parse(init.body).values.length,3);
       const guarded=trace.slice(trace.lastIndexOf('BEGIN'));
-      assert.match(guarded[1],/classes.*FOR SHARE/);
+      assert.match(guarded.find(value=>value.includes('FOR SHARE')),/classes.*FOR SHARE/);
       assert.ok(guarded.includes('checked:owner'));assert.ok(guarded.includes('checked:peer'));
       assert.ok(guarded.some(x=>x.includes('class_journal_teacher_assignments')&&x.includes('FOR SHARE')));
     }

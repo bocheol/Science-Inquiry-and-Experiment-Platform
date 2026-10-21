@@ -1,4 +1,4 @@
-FROM node:24-alpine AS base
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS base
 RUN npm install -g pnpm@11.19.0
 
 FROM base AS deps
@@ -13,7 +13,7 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
-FROM node:24-alpine AS runner
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS runner
 WORKDIR /app
 RUN apk add --no-cache font-noto-cjk
 ENV NODE_ENV=production

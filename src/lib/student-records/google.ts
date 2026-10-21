@@ -33,7 +33,15 @@ export async function recordsGoogleRequest(url: string, init: RequestInit = {}, 
   // then validate all recipients and dispatch with the grants still locked.
   const headers = { ...(await authHeaders()), ...Object.fromEntries(new Headers(init.headers).entries()) };
   const send = async () => {
-    const response = await fetch(url, { ...init, redirect: "error", headers, signal: AbortSignal.timeout(30_000) });
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, redirect: "error", headers, signal: AbortSignal.timeout(scope ? 10_000 : 30_000) });
+    } catch (error) {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new RecordError("Google 응답 시간이 초과되었습니다. 원본은 보관되어 있으며, 같은 내보내기 요청으로 저장 결과를 확인한 뒤 재시도해 주세요.", 503);
+      }
+      throw error;
+    }
     if (!response.ok) {
       if (response.status === 404) throw new RecordError("Google 파일을 찾을 수 없거나 연결 계정에 접근 권한이 없습니다.", 404);
       throw new RecordError("Google 저장에 실패했습니다. 연결 계정의 파일 권한과 저장 공간을 확인한 뒤 재시도해 주세요. 플랫폼 원본은 보관되어 있습니다.", 503);

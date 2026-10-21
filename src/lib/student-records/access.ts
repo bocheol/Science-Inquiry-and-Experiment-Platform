@@ -81,11 +81,15 @@ export async function recordTransaction<T>(actor: RecordActor, studentId: string
     // revocation that wins the class lock is visible before any records write.
     const target = (await client.query<{ class_id: string }>("SELECT class_id FROM users WHERE id = $1", [studentId])).rows[0];
     if (!target?.class_id) throw new RecordError("학생의 담당 반을 확인해 주세요.", 403);
-    await client.query("SELECT id FROM classes WHERE id = $1 FOR UPDATE", [target.class_id]);
-    for (const id of [...new Set([actor.id, studentId])].sort()) await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [id]);
+    await client.query("SELECT id FROM classes WHERE id = $1 FOR SHARE", [target.class_id]);
+    // Permission parents are read locks; only the student being changed needs
+    // an exclusive row lock. Unrelated students can save during a slow export.
+    for (const id of [...new Set([actor.id, studentId])].sort()) {
+      await client.query("SELECT id FROM users WHERE id = $1 FOR " + (id === studentId ? "UPDATE" : "SHARE"), [id]);
+    }
     const student = await assertRecordStudent(client, actor, studentId);
     if (student.class_id !== target.class_id) throw new RecordError("학생의 반이 변경되었습니다. 다시 확인해 주세요.", 409);
-    await client.query("SELECT class_id FROM record_teacher_classes WHERE class_id = $1 FOR UPDATE", [student.class_id]);
+    await client.query("SELECT class_id FROM record_teacher_classes WHERE class_id = $1 FOR SHARE", [student.class_id]);
     await assertRecordStudent(client, actor, studentId);
     await client.query("INSERT INTO record_submissions (student_id) VALUES ($1) ON CONFLICT (student_id) DO NOTHING", [studentId]);
     await client.query("SELECT student_id FROM record_submissions WHERE student_id = $1 FOR UPDATE", [studentId]);
@@ -105,21 +109,42 @@ export async function withRecordTransmissionAccess<T>(actor: RecordActor, items:
   const client = await (await getDb()).connect();
   try {
     await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
-    await client.query("SELECT id FROM classes WHERE academic_year = $1 ORDER BY id FOR SHARE", [ACADEMIC_YEAR]);
+    await client.query("SET LOCAL lock_timeout = '5s'");
+    await client.query("SET LOCAL statement_timeout = '5s'");
+    const targets = new Map<string, string>();
+    for (const studentId of [...new Set(items.map(item => item.studentId))].sort()) {
+      const target = (await client.query<{ class_id: string }>("SELECT class_id FROM users WHERE id = $1", [studentId])).rows[0];
+      if (!target?.class_id) throw new RecordError("학생의 담당 반을 확인해 주세요.", 403);
+      targets.set(studentId, target.class_id);
+    }
+    for (const classId of [...new Set(targets.values())].sort()) {
+      await client.query("SELECT id FROM classes WHERE id = $1 FOR SHARE", [classId]);
+    }
     for (const id of [...new Set([actor.id, ...items.map(item => item.studentId)])].sort()) {
       await client.query("SELECT id FROM users WHERE id = $1 FOR SHARE", [id]);
     }
     // Also serialize direct assignment-row updates, not only the UI setter.
-    await client.query("SELECT class_id FROM record_teacher_classes WHERE teacher_id = $1 ORDER BY class_id FOR SHARE", [actor.id]);
+    for (const classId of [...new Set(targets.values())].sort()) {
+      await client.query("SELECT class_id FROM record_teacher_classes WHERE class_id = $1 FOR SHARE", [classId]);
+    }
+    // Keep the actor's historical journal grants locked too: saved evidence can
+    // reference a previous class. These rows do not lock unrelated student saves.
     await client.query("SELECT class_id FROM class_journal_teacher_assignments WHERE teacher_id = $1 ORDER BY class_id FOR SHARE", [actor.id]);
     for (const item of items) {
-      await assertRecordStudent(client, actor, item.studentId);
+      const student = await assertRecordStudent(client, actor, item.studentId);
+      if (student.class_id !== targets.get(item.studentId)) throw new RecordError("학생의 반이 변경되었습니다. 다시 확인해 주세요.", 409);
       if ("evidence" in item) await assertRecordEvidenceAccess(client, actor, item.studentId, item.evidence);
     }
     const result = await send();
     await client.query("COMMIT");
     return result;
-  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error && typeof error === "object" && "code" in error && (error.code === "55P03" || error.code === "57014")) {
+      throw new RecordError("권한 변경 또는 저장 처리를 기다리는 중입니다. 잠시 뒤 같은 요청으로 다시 확인해 주세요.", 503);
+    }
+    throw error;
+  }
   finally { client.release(); }
 }
 

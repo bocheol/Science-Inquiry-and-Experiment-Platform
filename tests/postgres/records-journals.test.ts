@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import { createHash } from "node:crypto";
-import { exportTeacherRecords } from "@/lib/student-records/google";
+import { exportTeacherRecords, recordsGoogleRequest } from "@/lib/student-records/google";
 import { SCHEMA_SQL } from "@/lib/db/schema";
 import { DATABASE_MIGRATIONS, runDatabaseMigrations } from "@/lib/db/migrations";
 import { ensureInitialCycle } from "@/lib/inquiry-cycles";
 import { buildCycleEvidencePayload } from "@/lib/cycle-evidence";
 import { canReadTeamJournals } from "@/lib/journal-access";
-import { assertRecordJournal, assertRecordStudent, type RecordActor } from "@/lib/student-records/access";
+import { assertRecordJournal, assertRecordStudent, withRecordTransmissionAccess, type RecordActor } from "@/lib/student-records/access";
 import { setJournalTeacherClasses } from "@/lib/journal-teacher-settings";
 import { collectRecordEvidence } from "@/lib/student-records/evidence";
 import { getRecordWorkspace, recordHistory, saveRecordDraft, saveRecordSubmission } from "@/lib/student-records/service";
@@ -291,3 +291,63 @@ it("does not transmit either student's prose when revocation commits during Goog
     vi.unstubAllGlobals();
   }
 });
+
+it("allows unrelated student and teacher saves during a slow export without locking other classes", async () => {
+  const unrelated: RecordActor = { id: "integration_unrelated_student", role: "student", mustChangePassword: false };
+  await db.query("INSERT INTO users(id,login_id,name,academic_year,role,class_id,password_hash,must_change_password) VALUES($1,'10903','합성 동시 저장 학생',2026,'student','integration_class_9','synthetic',FALSE)", [unrelated.id]);
+  const requestId = "synthetic-slow-export-unrelated";
+  const gate = deferredSignal(); let sent = false, saved = false;
+  vi.stubGlobal("fetch", syntheticExportTransport(requestId, async () => {
+    sent = true; await gate.promise; return Response.json({});
+  }));
+  const exporting = exportTeacherRecords(teacher, requestId).then(value => ({ value }), error => ({ error }));
+  let saving: Promise<unknown> | undefined;
+  const otherClass = await db.connect();
+  try {
+    await vi.waitFor(() => expect(sent).toBe(true), { timeout: 5000, interval: 20 });
+    await otherClass.query("BEGIN");
+    await otherClass.query("SELECT id FROM classes WHERE id='integration_class_8' FOR UPDATE NOWAIT");
+    await otherClass.query("COMMIT");
+    saving = (async () => {
+      await saveRecordSubmission(unrelated, unrelated.id, { expectedRevision: 0, selected: ["egg", "spectrum"], comments: {}, submit: false });
+      const workspace = await getRecordWorkspace(teacher, unrelated.id);
+      await saveRecordDraft(teacher, unrelated.id, { expectedRevision: workspace.draft!.revision,
+        expectedSubmissionRevision: workspace.submission.revision, expectedEvidenceHash: workspace.evidence!.hash,
+        course1: "합성 독립 저장", course2: "", notes: "", checkedGroups: [], finalize: false });
+      saved = true;
+    })().then(() => ({}), error => ({ error }));
+    await vi.waitFor(() => expect(saved).toBe(true), { timeout: 5000, interval: 20 });
+    expect(await saving).toEqual({});
+  } finally {
+    await otherClass.query("ROLLBACK"); otherClass.release();
+    gate.resolve(); await exporting; await saving; vi.unstubAllGlobals();
+  }
+});
+
+it("aborts a stalled Google transmission at its deadline and releases authorization locks", async () => {
+  vi.stubEnv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}");
+  vi.stubGlobal("fetch", (_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    expect(init.signal).toBeDefined();
+    init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  }));
+  try {
+    await expect(recordsGoogleRequest("https://sheets.googleapis.com/v4/spreadsheets/synthetic", { method: "PUT", body: "synthetic" },
+      { actor: teacher, items: [{ studentId: owner.id }] })).rejects.toMatchObject({ status: 503 });
+    await setJournalTeacherClasses(master.id, teacher.id, ["integration_class_8"], ["integration_class_8", "integration_class_9"]);
+    await expect(assertRecordStudent(db, teacher, owner.id)).rejects.toMatchObject({ status: 403 });
+  } finally {
+    await setJournalTeacherClasses(master.id, teacher.id, ["integration_class_8", "integration_class_9"], ["integration_class_8"]);
+    vi.unstubAllGlobals();
+  }
+}, 15000);
+
+it("bounds database lock waits and never starts a transmission after the lock deadline", async () => {
+  const blocker = await db.connect(); const send = vi.fn(async () => "must-not-send");
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM classes WHERE id='integration_class_9' FOR UPDATE");
+    await expect(withRecordTransmissionAccess(teacher, [{ studentId: owner.id }], send)).rejects.toMatchObject({ status: 503 });
+    expect(send).not.toHaveBeenCalled();
+  } finally { await blocker.query("ROLLBACK"); blocker.release(); }
+  expect(await withRecordTransmissionAccess(teacher, [{ studentId: owner.id }], async () => "recovered")).toBe("recovered");
+}, 10000);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a review-only integrated build package. NEVER contacts cloud services.
+"""Prepare an integrated build and recovery package. NEVER contacts cloud services.
 
 No deploy/execute option exists. A source tree can be used for local review;
 release approval requires an immutable commit and fresh CI for that commit.
@@ -23,6 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PINNED_TOOLS = [
     "scripts/prepare-integrated-deployment.py",
     "scripts/deployment/deployment_state.py",
+    "scripts/deployment/cloud_api.py",
+    "scripts/deployment/integrated_executor.py",
+    "scripts/deployment/google-readonly.mjs",
+    "scripts/deployment/rollback-drill.mjs",
     "scripts/deployment/migration-manifest.mjs",
     "scripts/deployment/recovery-policy.mjs",
     "scripts/deployment/recovery-server.mjs",
@@ -138,9 +142,29 @@ def verify_manifests(baseline, reviewed, candidate):
         raise RuntimeError("Reviewed PR migration metadata/checksums changed, including 0013-0015")
 
 
+def pinned_image(value):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}", value):
+        raise RuntimeError("Container image must use an explicit reviewed sha256 digest")
+    return value
+
+
+def pin_rollback_dockerfile(directory, node_image):
+    path = directory / "Dockerfile"
+    original = path.read_bytes()
+    text, count = re.subn(r"(?m)^FROM node:24-alpine(?:@sha256:[0-9a-f]{64})?(?= AS |$)",
+                         "FROM " + node_image, original.decode())
+    if count != 2:
+        raise RuntimeError("Unrecognized rollback Dockerfile; review its build before preparing")
+    path.write_text(text)
+    return {"path": "Dockerfile", "original_sha256": hashlib.sha256(original).hexdigest(),
+            "prepared_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "change": "Pin the two Node base image references to the reviewed digest; application source unchanged"}
+
+
 def prepare(repo, source, baseline_ref, reviewed_tree, output, image_base, source_is_tree=False,
-            *, reported_pr_head, baseline_origin="reconstructed-pr-diff"):
-    for value in (source, baseline_ref, reviewed_tree, reported_pr_head):
+            *, reported_pr_head, rollback_ref, docker_builder_image,
+            rollback_is_tree=False, baseline_origin="reconstructed-pr-diff"):
+    for value in (source, baseline_ref, reviewed_tree, reported_pr_head, rollback_ref):
         if not re.fullmatch(r"[0-9a-f]{40}", value):
             raise RuntimeError("Use exact Git object IDs; moving branches are not accepted")
     if git(repo, "cat-file", "-t", source).strip() != ("tree" if source_is_tree else "commit"):
@@ -149,6 +173,9 @@ def prepare(repo, source, baseline_ref, reviewed_tree, output, image_base, sourc
         raise RuntimeError("Reviewed baseline must identify its exact local tree")
     git(repo, "cat-file", "-e", baseline_ref + "^{commit}")
     git(repo, "cat-file", "-e", reviewed_tree + "^{tree}")
+    if git(repo, "cat-file", "-t", rollback_ref).strip() != ("tree" if rollback_is_tree else "commit"):
+        raise RuntimeError("Rollback source object type does not match")
+    pinned_image(docker_builder_image)
     if not re.fullmatch(r"[a-z0-9.-]+/[a-z0-9_./-]+", image_base) or ".." in image_base:
         raise RuntimeError("Provide the reviewed container repository, without tag or digest")
     if baseline_origin not in ("reconstructed-pr-diff", "local-commit-verified"):
@@ -162,17 +189,26 @@ def prepare(repo, source, baseline_ref, reviewed_tree, output, image_base, sourc
     tool_origins = pin_tools(repo, source, output)
     helper = output / "tools/scripts/deployment/migration-manifest.mjs"
     archive(repo, source, output / "release")
+    dockerfile = (output / "release/Dockerfile").read_text()
+    node_images = re.findall(r"(?m)^FROM (node:24-alpine@sha256:[0-9a-f]{64})", dockerfile)
+    if len(node_images) != 2 or len(set(node_images)) != 1:
+        raise RuntimeError("Both application Node bases must use the same reviewed digest")
+    node_image = pinned_image(node_images[0])
+    archive(repo, rollback_ref, output / "rollback")
+    rollback_build_change = pin_rollback_dockerfile(output / "rollback", node_image)
     with tempfile.TemporaryDirectory(prefix="integration-baselines-") as temporary:
         temporary = Path(temporary)
         archive(repo, baseline_ref, temporary / "baseline")
         archive(repo, reviewed_tree, temporary / "reviewed")
         candidate = manifest(output / "release", helper)
         verify_manifests(manifest(temporary / "baseline", helper), manifest(temporary / "reviewed", helper), candidate)
+        if manifest(output / "rollback", helper) != candidate:
+            raise RuntimeError("Normal rollback application must support exactly the candidate migration checksums")
     recovery = output / "recovery"; recovery.mkdir()
     for name in ("recovery-policy.mjs", "recovery-server.mjs"):
         shutil.copyfile(output / "tools/scripts/deployment" / name, recovery / name)
     (recovery / "migrations.json").write_text(json.dumps(candidate, indent=2) + "\n")
-    (recovery / "Dockerfile").write_text("""FROM node:24-alpine
+    (recovery / "Dockerfile").write_text("FROM " + node_image + "\n" + """\
 WORKDIR /app
 RUN npm install -g pnpm@11.19.0
 COPY release/package.json release/pnpm-lock.yaml release/pnpm-workspace.yaml ./
@@ -207,12 +243,14 @@ console.log(JSON.stringify({recovery:'maintenance-read-only',versions:expected.l
     label = ("review-tree-" if source_is_tree else "commit-") + source[:12]
     release_image = image_base + ":integrated-" + label + "-$BUILD_ID"
     recovery_image = image_base + ":maintenance-" + label + "-$BUILD_ID"
+    rollback_image = image_base + ":rollback-" + rollback_ref[:12] + "-$BUILD_ID"
     config = {"timeout": "1800s", "steps": [
-        {"name": "gcr.io/cloud-builders/docker", "args": ["build", "--label", "org.opencontainers.image.revision=" + source, "-t", release_image, "release"]},
-        {"name": "gcr.io/cloud-builders/docker", "args": ["build", "-f", "recovery/Dockerfile", "--label", "science.recovery.mode=read-only-maintenance", "-t", recovery_image, "."]},
-        {"name": "gcr.io/cloud-builders/docker", "args": ["run", "--rm", "--network", "none", "--mount", "type=bind,source=/workspace/checks,target=/verify,readonly", "--entrypoint", "node", release_image, "/verify/standalone.mjs", "/verify/extraction.ts"]},
-        {"name": "gcr.io/cloud-builders/docker", "args": ["run", "--rm", "--network", "none", "--mount", "type=bind,source=/workspace/checks,target=/verify,readonly", "--entrypoint", "node", recovery_image, "/verify/recovery.mjs"]},
-    ], "images": [release_image, recovery_image]}
+        {"name": docker_builder_image, "args": ["build", "--label", "org.opencontainers.image.revision=" + source, "-t", release_image, "release"]},
+        {"name": docker_builder_image, "args": ["build", "--label", "org.opencontainers.image.revision=" + rollback_ref, "-t", rollback_image, "rollback"]},
+        {"name": docker_builder_image, "args": ["build", "-f", "recovery/Dockerfile", "--label", "org.opencontainers.image.revision=" + source, "--label", "science.recovery.mode=read-only-maintenance", "-t", recovery_image, "."]},
+        {"name": docker_builder_image, "args": ["run", "--rm", "--network", "none", "--mount", "type=bind,source=/workspace/checks,target=/verify,readonly", "--entrypoint", "node", release_image, "/verify/standalone.mjs", "/verify/extraction.ts"]},
+        {"name": docker_builder_image, "args": ["run", "--rm", "--network", "none", "--mount", "type=bind,source=/workspace/checks,target=/verify,readonly", "--entrypoint", "node", recovery_image, "/verify/recovery.mjs"]},
+    ], "images": [release_image, rollback_image, recovery_image]}
     (output / "cloudbuild.review.json").write_text(json.dumps(config, indent=2) + "\n")
     (output / ".gcloudignore").write_text(".git\nnode_modules\n.env\n.env.*\n*.state.json\n")
     plan = {"mode": "PREPARED_ONLY_NOT_DEPLOYED", "source_commit": None if source_is_tree else source,
@@ -222,13 +260,19 @@ console.log(JSON.stringify({recovery:'maintenance-read-only',versions:expected.l
             "remote_pr_commit_object_verified": baseline_origin == "local-commit-verified",
             "reconstructed_from_main_commit": baseline_ref if baseline_origin == "reconstructed-pr-diff" else None,
             "tool_sources": tool_origins,
+            "image_inputs": {"node": node_image, "docker_builder": docker_builder_image},
+            "normal_rollback": {"source_commit": None if rollback_is_tree else rollback_ref,
+                                "source_tree": git(repo, "rev-parse", rollback_ref + "^{tree}").strip(),
+                                "dockerfile_derivation": rollback_build_change,
+                                "migrations_match_candidate": True,
+                                "runtime_drill_required": True},
             "migration_check_isolation": {"network": "Linux seccomp denies socket/connect/send syscalls",
                                          "environment": "PATH only; no inherited credentials",
                                          "filesystem": "Node read permission limited to exported sources and pinned helper"},
             "artifact_inventory": "artifact-manifest.json",
             "artifact_hash_definition": "SHA-256 of inventory covering every other file in the preparation directory",
-            "required_before_execution": ["immutable reviewed commit", "fresh full CI for exact commit including PostgreSQL", "reviewed container builds", "current production read-only baseline and account mapping", "coordinated global lease plus Cloud Run etag", "approved maintenance window and successful fresh DB backup", "explicit integrated deployment approval"],
-            "recovery": "read-only maintenance; login and student/teacher functions unavailable; no DB restore or migrations",
+            "required_before_execution": ["immutable reviewed commit", "fresh full CI for exact commit including PostgreSQL and normal rollback/backup restore drill", "reviewed container builds by digest with verified source archive and provenance", "current production read-only baseline and account mapping", "existing private global lease bucket plus Cloud Run etag", "approved maintenance window, writer quiescence, fresh DB backup and separate-instance restore evidence", "exact execution plan hash and explicit integrated deployment approval"],
+            "recovery": "Separate normal rollback application on the same 0015 schema; maintenance image remains 503-only. No automatic database restore or old 0012 application rollback.",
             "production_observed": False, "cloud_commands_executed": False}
     plan["manifest_sha256"] = hashlib.sha256(json.dumps(candidate, sort_keys=True).encode()).hexdigest()
     (output / "review-plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
@@ -246,9 +290,12 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image-base", required=True)
     parser.add_argument("--reported-pr-head", required=True)
+    rollback = parser.add_mutually_exclusive_group(required=True)
+    rollback.add_argument("--rollback-ref"); rollback.add_argument("--rollback-tree")
+    parser.add_argument("--docker-builder-image", required=True)
     parser.add_argument("--baseline-origin", choices=["reconstructed-pr-diff", "local-commit-verified"], default="reconstructed-pr-diff")
     args = parser.parse_args()
-    plan = prepare(ROOT, args.source_ref or args.source_tree, args.baseline_ref, args.reviewed_tree, args.output, args.image_base, bool(args.source_tree), reported_pr_head=args.reported_pr_head, baseline_origin=args.baseline_origin)
+    plan = prepare(ROOT, args.source_ref or args.source_tree, args.baseline_ref, args.reviewed_tree, args.output, args.image_base, bool(args.source_tree), reported_pr_head=args.reported_pr_head, baseline_origin=args.baseline_origin, rollback_ref=args.rollback_ref or args.rollback_tree, rollback_is_tree=bool(args.rollback_tree), docker_builder_image=args.docker_builder_image)
     print(json.dumps({"output": str(args.output), "mode": plan["mode"], "migrations": len(plan["migration_manifest"]), "source_commit": plan["source_commit"], "artifact_manifest_sha256": plan["artifact_manifest_sha256"]}, ensure_ascii=False))
 
 
