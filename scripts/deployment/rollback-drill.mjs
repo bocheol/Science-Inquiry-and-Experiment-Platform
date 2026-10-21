@@ -28,8 +28,15 @@ async function docker(...args) {
     return (await command('docker', args, { env: { PATH: process.env.PATH }, maxBuffer: 32 * 1024 * 1024, timeout: 180000 })).stdout;
   } catch { throw new Error('Isolated Docker command failed: ' + args[0]); }
 }
-async function port(name, inner) {
-  return JSON.parse(await docker('inspect', name))[0].NetworkSettings.Ports[inner + '/tcp'][0].HostPort;
+async function internalAddress(name) {
+  // Internal bridges need no published ports. The ephemeral Linux CI host can
+  // reach this bridge directly while containers have no external route.
+  const value = JSON.parse(await docker('inspect', name))[0];
+  assert.equal(value.State.Running, true, 'synthetic container is not running');
+  assert.deepEqual(Object.keys(value.NetworkSettings.Networks), [network]);
+  const address = value.NetworkSettings.Networks[network].IPAddress;
+  assert.match(address, /^\d{1,3}(\.\d{1,3}){3}$/);
+  return address;
 }
 async function ready(url) {
   for (let i = 0; i < 60; i++) {
@@ -44,11 +51,11 @@ async function stopApp() {
 async function startApp(image, databaseName) {
   await stopApp();
   const name = prefix + '-app-' + containers.length; containers.push(name);
-  await docker('run', '-d', '--name', name, '--network', network, '-p', '127.0.0.1::8080',
+  await docker('run', '-d', '--name', name, '--network', network,
     '-e', 'HOSTNAME=0.0.0.0', '-e', 'PORT=8080', '-e', 'NODE_ENV=production',
     '-e', 'DATABASE_URL=postgresql://postgres:' + password + '@' + databaseContainer + ':5432/' + databaseName,
     '-e', 'SESSION_SECRET=synthetic-isolated-session-only', image);
-  app = { name, url: 'http://127.0.0.1:' + await port(name, 8080) };
+  app = { name, url: 'http://' + await internalAddress(name) + ':8080' };
   return ready(app.url);
 }
 async function login(loginId) {
@@ -92,13 +99,13 @@ try {
   await docker('network', 'create', '--internal', network);
   assert.equal(JSON.parse(await docker('network', 'inspect', network))[0].Internal, true);
   containers.push(databaseContainer);
-  await docker('run', '-d', '--name', databaseContainer, '--network', network, '-p', '127.0.0.1::5432',
+  await docker('run', '-d', '--name', databaseContainer, '--network', network,
     '-e', 'POSTGRES_PASSWORD=' + password, '-e', 'POSTGRES_DB=science_release_drill', postgresImage);
   for (let i = 0; i < 30; i++) {
     try { await docker('exec', databaseContainer, 'pg_isready', '-U', 'postgres'); break; } catch { await pause(1000); }
   }
-  const dbPort = Number(await port(databaseContainer, 5432));
-  database = new Pool({ host: '127.0.0.1', port: dbPort, user: 'postgres', password, database: 'science_release_drill', max: 3 });
+  const databaseHost = await internalAddress(databaseContainer);
+  database = new Pool({ host: databaseHost, port: 5432, user: 'postgres', password, database: 'science_release_drill', max: 3 });
   assert.equal((await database.query("SELECT count(*)::int n FROM information_schema.tables WHERE table_schema='public'")).rows[0].n, 0);
   await database.query(SCHEMA_SQL);
   await runDatabaseMigrations(database, DATABASE_MIGRATIONS.filter(row => row.version <= '0012'));
@@ -129,7 +136,7 @@ try {
   await docker('cp', databaseContainer + ':/tmp/synthetic.dump', dump);
   await docker('exec', databaseContainer, 'createdb', '-U', 'postgres', 'science_release_restore');
   await docker('exec', databaseContainer, 'pg_restore', '-U', 'postgres', '-d', 'science_release_restore', '--exit-on-error', '--no-owner', '/tmp/synthetic.dump');
-  const restored = new Pool({ host: '127.0.0.1', port: dbPort, user: 'postgres', password, database: 'science_release_restore', max: 2 });
+  const restored = new Pool({ host: databaseHost, port: 5432, user: 'postgres', password, database: 'science_release_restore', max: 2 });
   try {
     assert.deepEqual((await restored.query('SELECT version,name,checksum FROM schema_migrations ORDER BY version')).rows, baselineMigrations);
     assert.deepEqual((await restored.query('SELECT id,student_id,activities,observations,reflections FROM experiment_journals ORDER BY id')).rows, original);
